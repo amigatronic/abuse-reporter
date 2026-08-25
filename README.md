@@ -1,5 +1,17 @@
 # Abuse Reporter — Google Apps Script
 
+**Tired of spam? Fight back automatically.**
+
+Abuse Reporter is a Google Apps Script that transforms your Gmail spam folder into an automated abuse reporting system. Instead of just deleting spam and phishing emails, it extracts the originating IP address, looks up the abuse contact via RDAP/WHOIS databases, and sends detailed reports to the offending provider—forcing spammers to face consequences at the source.
+
+## Why This Exists
+
+Most email users passively accept spam, trusting filters to catch threats. But spammers rely on this apathy. Every unreported spam email is a free pass for attackers to continue their operations. Abuse Reporter changes this dynamic by:
+
+1. **Automating the reporting process** – No manual WHOIS lookups, no copy-pasting headers
+2. **Hitting spammers where it hurts** – Reports go directly to the hosting provider's abuse desk, risking account suspension
+3. **Creating network effects** – The more people use this, the faster bad actors get shut down
+
 Automated spam/phishing abuse reporter for Gmail. Scans your Spam folder, extracts the real source IP, looks up the responsible provider via RDAP/RIPE/ARIN, and sends a structured abuse report — then trashes the message.
 
 ## Features
