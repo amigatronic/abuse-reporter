@@ -27,7 +27,9 @@ Automated spam/phishing abuse reporter for Gmail. Scans your Spam folder, extrac
 
 ## Forwarded Email Handling
 
-Many users consolidate multiple email accounts into Gmail using automatic forwarding (e.g., forwarding from a Tiscali or Aruba account to Gmail). When spam arrives at the original account and gets forwarded to Gmail, most abuse reporting tools fail because they see the forwarding server's IP instead of the spammer's real IP.
+Many users consolidate multiple email accounts into Gmail using automatic forwarding (e.g., forwarding from Yahoo Mail, ProtonMail, iCloud, or custom corporate domains to Gmail). When spam arrives at the original account and gets forwarded, most abuse reporting tools fail because they see the forwarding server's IP instead of the spammer's real IP.
+
+**Note:** Not all email providers support automatic server-side forwarding. For example, Outlook.com/Hotmail does not offer native forwarding rules (only client-side rules that require the desktop app to be running). This feature works with providers that support server-side forwarding, such as Yahoo, ProtonMail, iCloud, and most custom domain hosting services.
 
 **Abuse Reporter solves this by:**
 1. Detecting forwarded emails (both as `message/rfc822` attachments and inline forwards)
@@ -36,7 +38,12 @@ Many users consolidate multiple email accounts into Gmail using automatic forwar
 4. Looking up the abuse contact for the *original* spam source, not the forwarding provider
 5. Sending the report to the correct hosting provider
 
-This ensures that even if spam reaches you via a forwarding chain, the report goes to the right place and the spammer's infrastructure gets flagged.
+This ensures that even if spam reaches you via a complex forwarding chain, the report goes to the right place and the spammer's infrastructure gets flagged.
+3. Extracting the true originating IP from the original `Received:` headers
+4. Looking up the abuse contact for the *original* spam source, not the forwarding provider
+5. Sending the report to the correct hosting provider
+
+This ensures that even if spam reaches you via a complex forwarding chain, the report goes to the right place and the spammer's infrastructure gets flagged.
 
 ## Evolution & Hardening
 
