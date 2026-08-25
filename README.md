@@ -25,6 +25,19 @@ Automated spam/phishing abuse reporter for Gmail. Scans your Spam folder, extrac
 - **Audit Trail**: Optional Google Sheet logging for compliance
 - **Webhook Support**: Trigger via HTTP GET with secret token for automated scheduling
 
+## Forwarded Email Handling
+
+Many users consolidate multiple email accounts into Gmail using automatic forwarding (e.g., forwarding from a Tiscali or Aruba account to Gmail). When spam arrives at the original account and gets forwarded to Gmail, most abuse reporting tools fail because they see the forwarding server's IP instead of the spammer's real IP.
+
+**Abuse Reporter solves this by:**
+1. Detecting forwarded emails (both as `message/rfc822` attachments and inline forwards)
+2. Parsing the original headers embedded in the forwarded message
+3. Extracting the true originating IP from the original `Received:` headers
+4. Looking up the abuse contact for the *original* spam source, not the forwarding provider
+5. Sending the report to the correct hosting provider
+
+This ensures that even if spam reaches you via a forwarding chain, the report goes to the right place and the spammer's infrastructure gets flagged.
+
 ## Evolution & Hardening
 
 This script evolved through real-world testing against sophisticated spam campaigns:
