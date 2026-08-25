@@ -15,7 +15,7 @@ Automated spam/phishing abuse reporter for Gmail. Scans your Spam folder, extrac
 ## Setup
 
 1. Open [script.google.com](https://script.google.com) → **New project**
-2. Paste the content of `src/AbuseReporter.gs`
+2. Remove old code and paste the content of `src/AbuseReporter.gs`
 3. In **Project Settings → Script Properties**, add:
    - `ABUSE_REPORTER_SECRET` — a random token used to protect the web trigger
 4. Enable services: **Gmail API**, **Drive API**
