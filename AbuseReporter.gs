@@ -441,120 +441,139 @@ return false;
 // PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
 // ============================================================
 function evaluateMessage(headerText, bodyText, subject, fromRaw) {
-var reasons = [];
-var score = 0;
-var signalCategories = {};
-headerText = unfoldHeaders(headerText);
-var bodyLower = (bodyText || "").toLowerCase();
-var fromMatch = fromRaw && fromRaw.match(/"?([^"<]*)"?\s*<([^>]+)>/);
-var displayName = fromMatch ? fromMatch[1].trim() : "";
-var fromEmail = (fromMatch ? fromMatch[2] : (fromRaw || "")).trim().toLowerCase();
-var fromDomain = (fromEmail.split("@")[1] || "").toLowerCase();
-if (fromDomain && TRUSTED_SENDER_DOMAINS.indexOf(fromDomain) !== -1) {
-return { category: "likely-false-positive", score: 0, reasons: ["Sender domain is in TRUSTED_SENDER_DOMAINS whitelist"], fromDomain: fromDomain };
+  var reasons = [];
+  var score = 0;
+  var signalCategories = {};
+  headerText = unfoldHeaders(headerText);
+  var bodyLower = (bodyText || "").toLowerCase();
+  var fromMatch = fromRaw && fromRaw.match(/"?([^"<]*)"?\s*<([^>]+)>/);
+  var displayName = fromMatch ? fromMatch[1].trim() : "";
+  var fromEmail = (fromMatch ? fromMatch[2] : (fromRaw || "")).trim().toLowerCase();
+  var fromDomain = (fromEmail.split("@")[1] || "").toLowerCase();
+  
+  if (fromDomain && TRUSTED_SENDER_DOMAINS.indexOf(fromDomain) !== -1) {
+    return { category: "likely-false-positive", score: 0, reasons: ["Sender domain is in TRUSTED_SENDER_DOMAINS whitelist"], fromDomain: fromDomain };
+  }
+  
+  var authResults = headerText.match(/Authentication-Results:[^\n]*/gi) || [];
+  var receivedSpf = headerText.match(/Received-SPF:[^\n]*/gi) || [];
+  var allAuthLines = authResults.concat(receivedSpf).join(" ").toLowerCase();
+  var spfFail = /spf=(fail|softfail)/.test(allAuthLines);
+  var dkimFail = /dkim=fail/.test(allAuthLines);
+  var dmarcFail = /dmarc=fail/.test(allAuthLines);
+  var allPass = /spf=pass/.test(allAuthLines) && /dkim=pass/.test(allAuthLines) && /dmarc=pass/.test(allAuthLines);
+  
+  if (spfFail || dkimFail || dmarcFail) {
+    score += 3;
+    signalCategories.auth = true;
+    reasons.push("Authentication failed (" + [spfFail && "SPF", dkimFail && "DKIM", dmarcFail && "DMARC"].filter(Boolean).join("/") + ")");
+  }
+  
+  var brandNames = ["paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta"];
+  brandNames.forEach(function(brand) {
+    if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
+      score += 3;
+      signalCategories.brand = true;
+      reasons.push("Display name imitates '" + brand + "' but real domain is '" + fromDomain + "'");
+    }
+  });
+  
+  var replyToMatch = headerText.match(/Reply-To:\s*.*?<?([^\s<>]+@[^\s<>]+)>?/i);
+  if (replyToMatch) {
+    var replyDomain = (replyToMatch[1].split("@")[1] || "").toLowerCase();
+    if (replyDomain && fromDomain && replyDomain !== fromDomain) {
+      score += 2;
+      signalCategories.replyto = true;
+      reasons.push("Reply-To (" + replyDomain + ") differs from From (" + fromDomain + ")");
+    }
+  }
+  
+  // Expanded keywords to catch gambling, casino, and financial spam
+  var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
+  var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
+  
+  var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
+  var mrHits = mediumRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
+  
+  if (hrHits.length > 0 || mrHits.length > 0) {
+    score += 1;
+    signalCategories.keywords = true;
+    if (hrHits.length > 0) reasons.push("High-risk phrases: " + hrHits.join(", "));
+    if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
+  }
+  
+  if (/xn--/i.test(fromDomain)) {
+    score += 3;
+    signalCategories.structural = true;
+    reasons.push("Punycode/IDN sender domain: " + fromDomain);
+  }
+  var punycodeLinks = (bodyText || "").match(/https?:\/\/[^\s"'<>]*xn--[^\s"'<>]*/gi);
+  if (punycodeLinks && punycodeLinks.length > 0) {
+    score += 3;
+    signalCategories.structural = true;
+    reasons.push("Punycode/IDN link(s) in body");
+  }
+  
+  var hasLatin = /[a-z]/i;
+  var hasCyrillicOrGreek = /[\u0400-\u04FF\u0370-\u03FF]/;
+  if (fromDomain && hasLatin.test(fromDomain) && hasCyrillicOrGreek.test(fromDomain)) {
+    score += 3;
+    signalCategories.structural = true;
+    reasons.push("Mixed Latin/Cyrillic-Greek characters in sender domain (homoglyph attack)");
+  }
+  if (displayName && hasLatin.test(displayName) && hasCyrillicOrGreek.test(displayName)) {
+    score += 2;
+    signalCategories.structural = true;
+    reasons.push("Mixed Latin/Cyrillic-Greek characters in display name");
+  }
+  
+  if (bodyText) {
+    var exclamationRuns = bodyText.match(/!{2,}/g) || [];
+    var capsWords = bodyText.match(/\b[A-Z]{4,}\b/g) || [];
+    if (exclamationRuns.length >= 2 || capsWords.length >= 5) {
+      score += 1;
+      signalCategories.structural = true;
+      reasons.push("Excessive urgency punctuation or ALL-CAPS shouting");
+    }
+  }
+  
+  if (bodyText && /https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(bodyText)) {
+    score += 2;
+    signalCategories.links = true;
+    reasons.push("Direct link to an IP address");
+  }
+  if (bodyText && /https?:\/\/[a-z0-9-]+\.(tk|ml|ga|cf|gq|top|xyz|click|zip|country|kim)\b/i.test(bodyText)) {
+    score += 2;
+    signalCategories.links = true;
+    reasons.push("Link on a high-abuse TLD");
+  }
+  
+  var hrefTextMismatch = /href\s*=\s*["']https?:\/\/([^"'\/]+)[^"']*["'][^>]*>\s*(?:https?:\/\/)?([a-z0-9.-]+\.[a-z]{2,})/gi;
+  var mismatchMatch;
+  while ((mismatchMatch = hrefTextMismatch.exec(bodyText || "")) !== null) {
+    var hrefDomain = mismatchMatch[1].toLowerCase();
+    var visibleDomain = mismatchMatch[2].toLowerCase();
+    if (hrefDomain !== visibleDomain && hrefDomain.indexOf(visibleDomain) === -1) {
+      score += 3;
+      signalCategories.links = true;
+      reasons.push("Masked link: text '" + visibleDomain + "' points to '" + hrefDomain + "'");
+      break;
+    }
+  }
+  
+  var categoryCount = Object.keys(signalCategories).length;
+  var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
+  var senderTldSuspicious = /\.(tk|ml|ga|cf|gq|top|xyz|click|zip)$/i.test(fromDomain);
+  
+  // REMOVED: Automatic override to "likely-false-positive" based solely on authentication.
+  // Modern spam often has perfect SPF/DKIM/DMARC. Authentication is a baseline, not a guarantee of legitimacy.
+  // The classification now relies strictly on the heuristic score and signal categories.
+  
+  return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
 }
-var authResults = headerText.match(/Authentication-Results:[^\n]*/gi) || [];
-var receivedSpf = headerText.match(/Received-SPF:[^\n]*/gi) || [];
-var allAuthLines = authResults.concat(receivedSpf).join(" ").toLowerCase();
-var spfFail = /spf=(fail|softfail)/.test(allAuthLines);
-var dkimFail = /dkim=fail/.test(allAuthLines);
-var dmarcFail = /dmarc=fail/.test(allAuthLines);
-var allPass = /spf=pass/.test(allAuthLines) && /dkim=pass/.test(allAuthLines) && /dmarc=pass/.test(allAuthLines);
-if (spfFail || dkimFail || dmarcFail) {
-score += 3;
-signalCategories.auth = true;
-reasons.push("Authentication failed (" + [spfFail && "SPF", dkimFail && "DKIM", dmarcFail && "DMARC"].filter(Boolean).join("/") + ")");
-}
-var brandNames = ["paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta"];
-brandNames.forEach(function(brand) {
-if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
-score += 3;
-signalCategories.brand = true;
-reasons.push("Display name imitates '" + brand + "' but real domain is '" + fromDomain + "'");
-}
-});
-var replyToMatch = headerText.match(/Reply-To:\s*.*?<?([^\s<>]+@[^\s<>]+)>?/i);
-if (replyToMatch) {
-var replyDomain = (replyToMatch[1].split("@")[1] || "").toLowerCase();
-if (replyDomain && fromDomain && replyDomain !== fromDomain) {
-score += 2;
-signalCategories.replyto = true;
-reasons.push("Reply-To (" + replyDomain + ") differs from From (" + fromDomain + ")");
-}
-}
-var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity"];
-var mediumRiskKeywords = ["password", "bank", "credit card", "iban"];
-var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
-var mrHits = mediumRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
-if (hrHits.length > 0 || mrHits.length > 0) {
-score += 1;
-signalCategories.keywords = true;
-if (hrHits.length > 0) reasons.push("High-risk phrases: " + hrHits.join(", "));
-if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
-}
-if (/xn--/i.test(fromDomain)) {
-score += 3;
-signalCategories.structural = true;
-reasons.push("Punycode/IDN sender domain: " + fromDomain);
-}
-var punycodeLinks = (bodyText || "").match(/https?:\/\/[^\s"'<>]*xn--[^\s"'<>]*/gi);
-if (punycodeLinks && punycodeLinks.length > 0) {
-score += 3;
-signalCategories.structural = true;
-reasons.push("Punycode/IDN link(s) in body");
-}
-var hasLatin = /[a-z]/i;
-var hasCyrillicOrGreek = /[\u0400-\u04FF\u0370-\u03FF]/;
-if (fromDomain && hasLatin.test(fromDomain) && hasCyrillicOrGreek.test(fromDomain)) {
-score += 3;
-signalCategories.structural = true;
-reasons.push("Mixed Latin/Cyrillic-Greek characters in sender domain (homoglyph attack)");
-}
-if (displayName && hasLatin.test(displayName) && hasCyrillicOrGreek.test(displayName)) {
-score += 2;
-signalCategories.structural = true;
-reasons.push("Mixed Latin/Cyrillic-Greek characters in display name");
-}
-if (bodyText) {
-var exclamationRuns = bodyText.match(/!{2,}/g) || [];
-var capsWords = bodyText.match(/\b[A-Z]{4,}\b/g) || [];
-if (exclamationRuns.length >= 2 || capsWords.length >= 5) {
-score += 1;
-signalCategories.structural = true;
-reasons.push("Excessive urgency punctuation or ALL-CAPS shouting");
-}
-}
-if (bodyText && /https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(bodyText)) {
-score += 2;
-signalCategories.links = true;
-reasons.push("Direct link to an IP address");
-}
-if (bodyText && /https?:\/\/[a-z0-9-]+\.(tk|ml|ga|cf|gq|top|xyz|click|zip|country|kim)\b/i.test(bodyText)) {
-score += 2;
-signalCategories.links = true;
-reasons.push("Link on a high-abuse TLD");
-}
-var hrefTextMismatch = /href\s*=\s*["']https?:\/\/([^"'\/]+)[^"']*["'][^>]*>\s*(?:https?:\/\/)?([a-z0-9.-]+\.[a-z]{2,})/gi;
-var mismatchMatch;
-while ((mismatchMatch = hrefTextMismatch.exec(bodyText || "")) !== null) {
-var hrefDomain = mismatchMatch[1].toLowerCase();
-var visibleDomain = mismatchMatch[2].toLowerCase();
-if (hrefDomain !== visibleDomain && hrefDomain.indexOf(visibleDomain) === -1) {
-score += 3;
-signalCategories.links = true;
-reasons.push("Masked link: text '" + visibleDomain + "' points to '" + hrefDomain + "'");
-break;
-}
-}
-var categoryCount = Object.keys(signalCategories).length;
-var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
-var senderTldSuspicious = /\.(tk|ml|ga|cf|gq|top|xyz|click|zip)$/i.test(fromDomain);
-if (allPass && score === 0 && !senderTldSuspicious && fromDomain) {
-category = "likely-false-positive";
-reasons.push("SPF/DKIM/DMARC all valid, no risk signal detected");
-}
-return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
-}
+
+
+
 function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
 if (!ip || !abuseEmails || abuseEmails.length === 0) return false;
 if (isExcludedIp(ip)) return false;
