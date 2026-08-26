@@ -605,7 +605,6 @@ function buildArfBlob(result, evalResult, subject, rawHeader) {
   } catch (e) {
     Logger.log("Could not build ARF blob: " + e.toString());
     return null;
-1.1.2
   }
 }
 
