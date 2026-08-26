@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.1.2 (Hardened & Optimized)
+ * ABUSE REPORTER - v1.2.0
  * ============================================================
  */
 
@@ -452,6 +452,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   headerText = unfoldHeaders(headerText);
   var bodyLower = (bodyText || "").toLowerCase();
   
+  // Extract domain from decoded From for accurate analysis
   var fromMatch = fromDecoded && fromDecoded.match(/"?([^"<]*)"?\s*<([^>]+)>/);
   var displayName = fromMatch ? fromMatch[1].trim() : (fromDecoded || "").trim();
   var fromEmail = (fromMatch ? fromMatch[2] : (fromDecoded || "")).trim().toLowerCase();
@@ -468,6 +469,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Obfuscated Base64/Quoted-Printable encoding in From/Subject");
   }
   
+  // Authentication signals
   var authResults = headerText.match(/Authentication-Results:[^\n]*/gi) || [];
   var receivedSpf = headerText.match(/Received-SPF:[^\n]*/gi) || [];
   var allAuthLines = authResults.concat(receivedSpf).join(" ").toLowerCase();
@@ -481,6 +483,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Authentication failed (" + [spfFail && "SPF", dkimFail && "DKIM", dmarcFail && "DMARC"].filter(Boolean).join("/") + ")");
   }
   
+  // Display name impersonating a brand/institution
   var brandNames = ["paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta"];
   brandNames.forEach(function(brand) {
     if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
@@ -490,6 +493,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   });
   
+  // Reply-To different from From
   var replyToMatch = headerText.match(/Reply-To:\s*.*?<?([^\s<>]+@[^\s<>]+)>?/i);
   if (replyToMatch) {
     var replyDomain = (replyToMatch[1].split("@")[1] || "").toLowerCase();
@@ -500,6 +504,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // Keywords: weak signal, capped contribution
   var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
   var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
   var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
@@ -512,12 +517,37 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
   }
   
+  // Universal Classifieds Bot Detection (works for any user, any item)
+  var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
+  var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
+  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
+  var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
+  var isVeryShortBody = bodyText && bodyText.replace(/\s/g, '').length < 150;
+
+  if (isFreeProvider && isBurnerEmail && hasGenericQuery) {
+    score += 4;
+    signalCategories.structural = true;
+    reasons.push("Matched universal classifieds bot pattern (burner email + generic short query)");
+    if (isVeryShortBody) {
+      score += 1;
+      reasons.push("Suspiciously short message body typical of automated templates");
+    }
+  }
+  
+  // Punycode/IDN detection
   if (/xn--/i.test(fromDomain)) {
     score += 3;
     signalCategories.structural = true;
     reasons.push("Punycode/IDN sender domain: " + fromDomain);
   }
+  var punycodeLinks = (bodyText || "").match(/https?:\/\/[^\s"'<>]*xn--[^\s"'<>]*/gi);
+  if (punycodeLinks && punycodeLinks.length > 0) {
+    score += 3;
+    signalCategories.structural = true;
+    reasons.push("Punycode/IDN link(s) in body");
+  }
   
+  // Homoglyph mixing detection on decoded display name
   var hasLatin = /[a-z]/i;
   var hasCyrillicOrGreek = /[\u0400-\u04FF\u0370-\u03FF]/;
   if (fromDomain && hasLatin.test(fromDomain) && hasCyrillicOrGreek.test(fromDomain)) {
@@ -531,6 +561,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Mixed Latin/Cyrillic-Greek characters in display name");
   }
   
+  // Urgency patterns
   if (bodyText) {
     var exclamationRuns = bodyText.match(/!{2,}/g) || [];
     var capsWords = bodyText.match(/\b[A-Z]{4,}\b/g) || [];
@@ -541,6 +572,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // Suspicious links
   if (bodyText && /https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(bodyText)) {
     score += 2;
     signalCategories.links = true;
@@ -565,11 +597,20 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // --- CRITICAL SAFEGUARD ---
+  // If score is 0, there are absolutely no risk signals. It must be a false positive.
+  // Never report an email with a score of 0.
+  if (score === 0) {
+    return { category: "likely-false-positive", score: 0, reasons: ["No risk signals detected (score 0)"], fromDomain: fromDomain };
+  }
+  
+  // Classification
   var categoryCount = Object.keys(signalCategories).length;
   var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
   
   return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
 }
+
 
 function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
   if (!ip || !abuseEmails || abuseEmails.length === 0) return false;
@@ -605,6 +646,7 @@ function buildArfBlob(result, evalResult, subject, rawHeader) {
   } catch (e) {
     Logger.log("Could not build ARF blob: " + e.toString());
     return null;
+1.1.2
   }
 }
 
