@@ -52,8 +52,9 @@ This script evolved through real-world testing against sophisticated spam campai
 
 - **v1.0** — basic IP extraction and reporting.
 - **v1.1** — fixed IPv4-mapped IPv6 handling (`::ffff:192.168.x.x`), replaced `ip-api.com` with HTTPS-compatible `ipwho.is`, removed false-positive override for authenticated spam.
-- **v1.1.1** — added Base64/Quoted-Printable obfuscation detection (spammers hide homoglyphs in encoded headers), increased scoring for mixed-character-set attacks.
-- **v1.1.2** — **Reliability & Safety Hardening**: Added retry logic before trashing messages, introduced `CACHE_DIRTY` flag to optimize `PropertiesService` quota usage, enforced 30s network timeouts, added `message.getId()` to all logs for traceability, and refined `isSafeAbuseTarget` to use strict `endsWith` domain matching.
+- **v1.1.1** — added Base64/Quoted-Printable obfuscation detection, increased scoring for mixed-character-set attacks.
+- **v1.1.2** — reliability hardening: retry logic before trashing, `CACHE_DIRTY` flag for quota optimization, 30s network timeouts, Message ID logging.
+- **v1.2.0** — **Universal Bot Detection**: Added multi-language classifieds scam bot fingerprinting (burner email patterns + generic marketplace queries in DE/IT/EN/FR), works for any user regardless of the item being sold.
 
 ## Installation
 
