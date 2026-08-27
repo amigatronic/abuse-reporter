@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.2.0
+ * ABUSE REPORTER - v1.2.1
  * ============================================================
  */
 
@@ -504,7 +504,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // Keywords: weak signal, capped contribution
+  // Standard Keywords: weak signal, capped contribution
   var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
   var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
   var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
@@ -516,8 +516,47 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     if (hrHits.length > 0) reasons.push("High-risk phrases: " + hrHits.join(", "));
     if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
   }
+
+  // --- 1. Universal Bulk Spam / Marketing Abuse Detection ---
+  // Works for ANY user, language-agnostic, focuses on structural spam patterns.
+  var bulkSpamScore = 0;
+  var bulkSpamReasons = [];
+
+  if (/[a-zA-Z]+\.[a-zA-Z0-9]{6,}@/.test(fromEmail)) {
+    bulkSpamScore += 2;
+    bulkSpamReasons.push("Randomized string in sender email local part");
+  }
+  if (/https?:\/\/(track|click|redirect|go|mail)\.[a-z0-9-]+\.(net|com|org|info|biz|io)/i.test(bodyText || "")) {
+    bulkSpamScore += 2;
+    bulkSpamReasons.push("Contains tracking or redirect link domain");
+  }
+  if (/\d{3,5}\s+[A-Z][a-z]+\s+(Dr|St|Ave|Blvd|Rd|Ln|Way|Ct|Street|Avenue|Boulevard),?\s+(Ste|Suite|Unit|Apt|#)\s+\d+/i.test(bodyText || "")) {
+    bulkSpamScore += 2;
+    bulkSpamReasons.push("Suspicious fake physical address pattern (CAN-SPAM template)");
+  }
+  var spamActionKeywords = /\b(vincitore|winner|gewinner|gagnant|spedizione|shipping|livraison|consegna|pacco|package|paket|colis|trapano|dexeter|account|sospeso|suspended)\b/i;
+  if (spamActionKeywords.test(subject + " " + bodyLower) && /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(subject)) {
+    bulkSpamScore += 2;
+    bulkSpamReasons.push("Spam action keywords combined with encoded subject");
+  }
+
+  if (bulkSpamScore >= 3) {
+    score += bulkSpamScore;
+    signalCategories.structural = true;
+    reasons = reasons.concat(bulkSpamReasons);
+  }
+
+  // --- 2. Sophisticated Marketing / Phishing Spam Detection ---
+  // Catches emails that pass authentication but use generic "reward" or "urgency" hooks.
+  var sophisticatedSpamKeywords = /\b(reward awaits|exclusive reward|surprise waiting|ready to be claimed|just a click away|claim your reward|account has a surprise|special just for you)\b/i;
+  if (sophisticatedSpamKeywords.test(subject + " " + bodyLower)) {
+    score += 3;
+    signalCategories.keywords = true;
+    reasons.push("Generic 'reward' or 'claim' marketing spam pattern detected");
+  }
   
-  // Universal Classifieds Bot Detection (works for any user, any item)
+  // --- 3. Universal Classifieds Bot Detection ---
+  // Matches random 6+ letter + 2+ digit free email accounts combined with generic marketplace queries.
   var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
   var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
   var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
@@ -597,20 +636,17 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // --- CRITICAL SAFEGUARD ---
-  // If score is 0, there are absolutely no risk signals. It must be a false positive.
-  // Never report an email with a score of 0.
+  // CRITICAL SAFEGUARD: Never report an email with a score of 0.
   if (score === 0) {
     return { category: "likely-false-positive", score: 0, reasons: ["No risk signals detected (score 0)"], fromDomain: fromDomain };
   }
   
-  // Classification
+  // Final Classification
   var categoryCount = Object.keys(signalCategories).length;
   var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
   
   return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
 }
-
 
 function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
   if (!ip || !abuseEmails || abuseEmails.length === 0) return false;
