@@ -51,10 +51,14 @@ Many users consolidate multiple email accounts into Gmail using automatic forwar
 This script evolved through real-world testing against sophisticated spam campaigns:
 
 - **v1.0** — basic IP extraction and reporting.
-- **v1.1** — fixed IPv4-mapped IPv6 handling (`::ffff:192.168.x.x`), replaced `ip-api.com` with HTTPS-compatible `ipwho.is`, removed false-positive override for authenticated spam.
+- **v1.1** — fixed IPv4-mapped IPv6 handling, replaced `ip-api.com` with HTTPS-compatible `ipwho.is`, removed false-positive override for authenticated spam.
 - **v1.1.1** — added Base64/Quoted-Printable obfuscation detection, increased scoring for mixed-character-set attacks.
 - **v1.1.2** — reliability hardening: retry logic before trashing, `CACHE_DIRTY` flag for quota optimization, 30s network timeouts, Message ID logging.
-- **v1.2.0** — **Universal Bot Detection**: Added multi-language classifieds scam bot fingerprinting (burner email patterns + generic marketplace queries in DE/IT/EN/FR), works for any user regardless of the item being sold.
+- **v1.2.0** — universal classifieds bot detection (burner email patterns + generic marketplace queries in DE/IT/EN/FR).
+- **v1.3.0** — **Unified Universal Detection & Critical Safeguards**: 
+  - Integrated structural bulk spam detection (tracking domains, fake CAN-SPAM addresses, randomized sender strings).
+  - Added sophisticated marketing/phishing pattern recognition ("reward awaits", "claim your reward").
+  - Implemented a critical safeguard: emails with a heuristic score of `0` are now strictly classified as `likely-false-positive` and never reported, eliminating false positives on clean, authenticated newsletters.
 
 ## Installation
 
