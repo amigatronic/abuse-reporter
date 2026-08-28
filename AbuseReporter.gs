@@ -5,27 +5,57 @@
  */
 
 // ============================================================
-// CONFIG - edit these
+// CONFIGURATION
 // ============================================================
+
+// Maximum number of spam threads to process in a single execution run.
 var MAX_THREADS_PER_RUN = 30;
+
+// Maximum number of abuse reports to send to the same provider in a single run (prevents rate limiting).
 var MAX_PER_PROVIDER = 3;
+
+// Domains that should NEVER be reported, even if they appear in spam (e.g., internal company domains).
 var TRUSTED_SENDER_DOMAINS = [];
+
+// Known abuse trap domains that should be ignored to prevent false reporting.
 var KNOWN_TRAP_ABUSE_DOMAINS = [];
+
+// If true, attaches an RFC 5965 compliant Feedback Report (ARF) format text file to the email.
 var USE_ARF_ATTACHMENT = false;
+
+// If true, logs evaluation results (score, category, subject, sender) to a Google Sheet.
 var ENABLE_SHEET_LOG = false;
+
+// The ID of the Google Sheet used for logging (required only if ENABLE_SHEET_LOG is true).
 var LOG_SHEET_ID = "";
+
+// The Script Property key used to store the secret token for webhook authentication.
 var DOGET_SECRET_PROPERTY = "ABUSE_REPORTER_SECRET";
+
+// Time-to-live for the persistent RDAP lookup cache (default: 30 days in milliseconds).
 var CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// The Script Property key used to store the persistent RDAP lookup cache.
 var CACHE_PROPERTY_KEY = "ABUSE_LOOKUP_CACHE_V1";
+
+// Maximum number of entries to keep in the persistent cache to avoid quota limits.
 var CACHE_MAX_ENTRIES = 150;
+
+// Internal variable: holds the loaded IPv4 RDAP bootstrap data. Do not modify.
 var RDAP_BOOTSTRAP = null;
+
+// Internal variable: holds the in-memory cache during execution. Do not modify.
 var PERSISTENT_CACHE = {};
+
+// Internal variable: flag to prevent unnecessary Script Property writes if the cache hasn't changed. Do not modify.
 var CACHE_DIRTY = false;
 
 // --- ESCALATION CONFIGURATION ---
-// Providers known for poor abuse response. Add lowercase strings.
+
+// Providers known for poor or automated-only abuse responses. Add lowercase substrings.
 var ESCALATION_PROVIDERS = ["ovh", "ovhcloud", "ovh.net", "kimsufi", "soyoustart"];
-// Additional emails to CC when an escalation provider is detected
+
+// Additional email addresses to BCC when an escalation provider is detected, to increase visibility.
 var ESCALATION_CC_EMAILS = ["hostmaster@ovh.net", "security@ovh.net"];
 // ============================================================
 // MAIN LOOP
