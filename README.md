@@ -67,6 +67,33 @@ This script evolved through real-world testing against sophisticated spam campai
 5. Select `processAndSendAbuseReports` from the toolbar and click **Run** to grant the required permissions (Gmail, Properties, UrlFetch).
 6. Go to the **Triggers** (clock icon) on the left sidebar and add a time-driven trigger (recommended: every 24 hours).
 
+## Script Properties Configuration
+
+After installing the script, you need to configure two Script Properties for the cache and webhook functionality to work correctly.
+
+### How to set them up:
+1. In the Apps Script editor, click on the **Project Settings** (gear icon ⚙️) on the left sidebar.
+2. Scroll down to the **Script Properties** section.
+3. Click **Add script property** and add the following two entries:
+
+| Property Name | Value | Description |
+|---------------|-------|-------------|
+| `ABUSE_LOOKUP_CACHE_V1` | *(leave empty or auto-managed)* | Used internally by the script to persist RDAP lookup cache across runs. Do not modify manually. |
+| `ABUSE_REPORTER_SECRET` | *(your custom secret token, e.g., `9764368992`)* | Required **only** if you want to trigger the script via HTTP webhook (e.g., from an external scheduler). This token must match the `token` parameter in the webhook URL. |
+
+4. Click **Save script properties**.
+
+### Webhook Usage (Optional)
+If you configured `ABUSE_REPORTER_SECRET`, you can trigger the script remotely via the following URL format:
+
+    https://script.google.com/macros/s/<YOUR_DEPLOYMENT_ID>/exec?token=<YOUR_SECRET>
+
+This is useful for integrating with external schedulers (e.g., cron jobs, IFTTT, or home automation systems) without relying on Google's built-in time-driven triggers.
+
+### Privacy Note
+- The script stores **only** IP addresses, abuse email addresses, and timestamps in Script Properties (no full email headers or message content).
+- If you enable `ENABLE_SHEET_LOG = true`, the optional Google Sheet will contain email subjects and sender addresses. Treat this sheet as sensitive data and restrict its sharing permissions accordingly.
+
 ## Impact
 
 In testing, this script has:
