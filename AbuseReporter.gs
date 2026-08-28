@@ -541,6 +541,9 @@ function isExcludedIp(ip) {
 // ============================================================
 // PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
 // ============================================================
+// ============================================================
+// PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
+// ============================================================
 function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   var reasons = [];
   var score = 0;
@@ -548,21 +551,25 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   headerText = unfoldHeaders(headerText);
   var bodyLower = (bodyText || "").toLowerCase();
   
+  // Extract domain from decoded From for accurate analysis
   var fromMatch = fromDecoded && fromDecoded.match(/"?([^"<]*)"?\s*<([^>]+)>/);
   var displayName = fromMatch ? fromMatch[1].trim() : (fromDecoded || "").trim();
   var fromEmail = (fromMatch ? fromMatch[2] : (fromDecoded || "")).trim().toLowerCase();
   var fromDomain = (fromEmail.split("@")[1] || "").toLowerCase();
   
+  // 1. Trusted Domain Check
   if (fromDomain && TRUSTED_SENDER_DOMAINS.indexOf(fromDomain) !== -1) {
     return { category: "likely-false-positive", score: 0, reasons: ["Sender domain is in TRUSTED_SENDER_DOMAINS whitelist"], fromDomain: fromDomain };
   }
   
+  // 2. Obfuscation Detection: Spammers use Base64/QP to hide homoglyphs or bypass filters
   if (/=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(subject) || /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(fromDecoded)) {
     score += 2;
     signalCategories.structural = true;
     reasons.push("Obfuscated Base64/Quoted-Printable encoding in From/Subject");
   }
   
+  // 3. Authentication signals
   var authResults = headerText.match(/Authentication-Results:[^\n]*/gi) || [];
   var receivedSpf = headerText.match(/Received-SPF:[^\n]*/gi) || [];
   var allAuthLines = authResults.concat(receivedSpf).join(" ").toLowerCase();
@@ -576,6 +583,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Authentication failed (" + [spfFail && "SPF", dkimFail && "DKIM", dmarcFail && "DMARC"].filter(Boolean).join("/") + ")");
   }
   
+  // 4. Display name impersonating a brand/institution
   var brandNames = ["paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta"];
   brandNames.forEach(function(brand) {
     if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
@@ -585,6 +593,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   });
   
+  // 5. Reply-To different from From
   var replyToMatch = headerText.match(/Reply-To:\s*.*?<?([^\s<>]+@[^\s<>]+)>?/i);
   if (replyToMatch) {
     var replyDomain = (replyToMatch[1].split("@")[1] || "").toLowerCase();
@@ -595,6 +604,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // 6. Standard Keywords: weak signal, capped contribution
   var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
   var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
   var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
@@ -607,9 +617,10 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
   }
 
-  // --- Universal Bulk Spam / Marketing Abuse Detection ---
+  // 7. Universal Bulk Spam / Marketing Abuse Detection
   var bulkSpamScore = 0;
   var bulkSpamReasons = [];
+  
   if (/[a-zA-Z]+\.[a-zA-Z0-9]{6,}@/.test(fromEmail)) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Randomized string in sender email local part");
@@ -627,13 +638,14 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Spam action keywords combined with encoded subject");
   }
+  
   if (bulkSpamScore >= 3) {
     score += bulkSpamScore;
     signalCategories.structural = true;
     reasons = reasons.concat(bulkSpamReasons);
   }
 
-  // --- Sophisticated Marketing / Phishing Spam Detection ---
+  // 8. Sophisticated Marketing / Phishing Spam Detection
   var sophisticatedSpamKeywords = /\b(reward awaits|exclusive reward|surprise waiting|ready to be claimed|just a click away|claim your reward|account has a surprise|special just for you)\b/i;
   if (sophisticatedSpamKeywords.test(subject + " " + bodyLower)) {
     score += 3;
@@ -641,7 +653,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Generic 'reward' or 'claim' marketing spam pattern detected");
   }
   
-  // --- Universal Classifieds Bot Detection ---
+  // 9. Universal Classifieds Bot Detection
   var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
   var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
   var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
@@ -658,6 +670,38 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // 10. Suspicious Domain Structure & Display Name Mismatch (NEW)
+  var domainParts = fromDomain.split('.');
+  if (domainParts.length >= 5) {
+    score += 3;
+    signalCategories.structural = true;
+    reasons.push("Suspiciously deep subdomain structure (typical of burner domains)");
+  }
+  
+  var emailLocalPart = fromEmail.split('@')[0];
+  if (displayName && emailLocalPart) {
+    var nameClean = displayName.toLowerCase().replace(/\s+/g, '');
+    var localClean = emailLocalPart.toLowerCase();
+    
+    // If display name looks like a human name but email is generic/random/alert
+    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin/i.test(localClean)) {
+      if (!nameClean.includes(localClean.replace(/[^a-z]/g, '')) && !localClean.includes(nameClean.replace(/[^a-z]/g, ''))) {
+        score += 2;
+        signalCategories.structural = true;
+        reasons.push("Display name does not match email username (impersonation attempt)");
+      }
+    }
+  }
+
+  // 11. Expanded Payment/Account Phishing Keywords (NEW)
+  var extendedPhishingKeywords = /\b(payment failed|update payment|subscription renewal|cloud storage|account suspended|verify your identity|urgent action|required action)\b/i;
+  if (extendedPhishingKeywords.test(subject + " " + bodyLower)) {
+    score += 2;
+    signalCategories.keywords = true;
+    reasons.push("Contains classic phishing urgency or payment update keywords");
+  }
+  
+  // 12. Punycode/IDN detection
   if (/xn--/i.test(fromDomain)) {
     score += 3;
     signalCategories.structural = true;
@@ -670,6 +714,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Punycode/IDN link(s) in body");
   }
   
+  // 13. Homoglyph mixing detection
   var hasLatin = /[a-z]/i;
   var hasCyrillicOrGreek = /[\u0400-\u04FF\u0370-\u03FF]/;
   if (fromDomain && hasLatin.test(fromDomain) && hasCyrillicOrGreek.test(fromDomain)) {
@@ -683,6 +728,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Mixed Latin/Cyrillic-Greek characters in display name");
   }
   
+  // 14. Urgency patterns
   if (bodyText) {
     var exclamationRuns = bodyText.match(/!{2,}/g) || [];
     var capsWords = bodyText.match(/\b[A-Z]{4,}\b/g) || [];
@@ -693,6 +739,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
+  // 15. Suspicious links
   if (bodyText && /https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(bodyText)) {
     score += 2;
     signalCategories.links = true;
@@ -722,29 +769,11 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     return { category: "likely-false-positive", score: 0, reasons: ["No risk signals detected (score 0)"], fromDomain: fromDomain };
   }
   
+  // Final Classification
   var categoryCount = Object.keys(signalCategories).length;
   var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
   
   return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
-}
-
-function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
-  if (!ip || !abuseEmails || abuseEmails.length === 0) return false;
-  if (isExcludedIp(ip)) return false;
-  
-  var trapMatch = abuseEmails.some(function(email) {
-    var domain = email.split("@")[1];
-    return domain && KNOWN_TRAP_ABUSE_DOMAINS.indexOf(domain) !== -1;
-  });
-  if (trapMatch) return false;
-  
-  var suspicious = abuseEmails.every(function(email) {
-    var domain = email.split("@")[1];
-    return domain && senderDomain && (domain === senderDomain || domain.endsWith("." + senderDomain));
-  });
-  if (suspicious) return false;
-  
-  return true;
 }
 
 // ============================================================
