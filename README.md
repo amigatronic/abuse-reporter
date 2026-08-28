@@ -55,10 +55,8 @@ This script evolved through real-world testing against sophisticated spam campai
 - **v1.1.1** — added Base64/Quoted-Printable obfuscation detection, increased scoring for mixed-character-set attacks.
 - **v1.1.2** — reliability hardening: retry logic before trashing, `CACHE_DIRTY` flag for quota optimization, 30s network timeouts, Message ID logging.
 - **v1.2.0** — universal classifieds bot detection (burner email patterns + generic marketplace queries in DE/IT/EN/FR).
-- **v1.3.0** — **Unified Universal Detection & Critical Safeguards**: 
-  - Integrated structural bulk spam detection (tracking domains, fake CAN-SPAM addresses, randomized sender strings).
-  - Added sophisticated marketing/phishing pattern recognition ("reward awaits", "claim your reward").
-  - Implemented a critical safeguard: emails with a heuristic score of `0` are now strictly classified as `likely-false-positive` and never reported, eliminating false positives on clean, authenticated newsletters.
+- **v1.3.0** — unified universal detection & critical safeguards: structural bulk spam detection, sophisticated phishing hooks, and strict zero-score false-positive prevention.
+- **v1.3.1** — **CRITICAL FIXES**: Accurate originating IP extraction for forwarded emails (strict `^Received:` parsing, ignoring `Received-SPF`) and automatic BCC escalation for unresponsive hosting providers (e.g., OVH).
 
 ## Installation
 
