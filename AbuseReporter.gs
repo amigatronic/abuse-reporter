@@ -9,7 +9,7 @@
 // ============================================================
 var MAX_THREADS_PER_RUN = 30;
 var MAX_PER_PROVIDER = 3;
-var TRUSTED_SENDER_DOMAINS = ["gmail.com"]; // Added based on previous discussion
+var TRUSTED_SENDER_DOMAINS = [];
 var KNOWN_TRAP_ABUSE_DOMAINS = [];
 var USE_ARF_ATTACHMENT = false;
 var ENABLE_SHEET_LOG = false;
