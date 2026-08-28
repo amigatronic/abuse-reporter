@@ -656,8 +656,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   // 9. Universal Classifieds Bot Detection
   var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
   var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
-  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
-  var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
+  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i; var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
   var isVeryShortBody = bodyText && bodyText.replace(/\s/g, '').length < 150;
 
   if (isFreeProvider && isBurnerEmail && hasGenericQuery) {
@@ -775,6 +774,28 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   
   return { category: category, score: score, reasons: reasons, fromDomain: fromDomain };
 }
+
+function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
+  if (!ip || !abuseEmails || abuseEmails.length === 0) return false;
+  if (isExcludedIp(ip)) return false;
+  
+  var trapMatch = abuseEmails.some(function(email) {
+    var domain = email.split("@")[1];
+    return domain && KNOWN_TRAP_ABUSE_DOMAINS.indexOf(domain) !== -1;
+  });
+  if (trapMatch) return false;
+  
+  var suspicious = abuseEmails.every(function(email) {
+    var domain = email.split("@")[1];
+    return domain && senderDomain && (domain === senderDomain || domain.endsWith("." + senderDomain));
+  });
+  if (suspicious) return false;
+  
+  return true;
+}
+
+
+
 
 // ============================================================
 // OPTIONAL: ARF (RFC 5965) FEEDBACK-REPORT ATTACHMENT
