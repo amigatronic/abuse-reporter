@@ -5,11 +5,11 @@
  */
 
 // ============================================================
-// CONFIG - Edit these
+// CONFIG - edit these
 // ============================================================
 var MAX_THREADS_PER_RUN = 30;
 var MAX_PER_PROVIDER = 3;
-var TRUSTED_SENDER_DOMAINS = [];
+var TRUSTED_SENDER_DOMAINS = ["gmail.com"]; // Added based on previous discussion
 var KNOWN_TRAP_ABUSE_DOMAINS = [];
 var USE_ARF_ATTACHMENT = false;
 var ENABLE_SHEET_LOG = false;
@@ -20,8 +20,13 @@ var CACHE_PROPERTY_KEY = "ABUSE_LOOKUP_CACHE_V1";
 var CACHE_MAX_ENTRIES = 150;
 var RDAP_BOOTSTRAP = null;
 var PERSISTENT_CACHE = {};
-var CACHE_DIRTY = false; // Flag to avoid unnecessary PropertiesService writes
+var CACHE_DIRTY = false;
 
+// --- ESCALATION CONFIGURATION ---
+// Providers known for poor abuse response. Add lowercase strings.
+var ESCALATION_PROVIDERS = ["ovh", "ovhcloud", "ovh.net", "kimsufi", "soyoustart"];
+// Additional emails to CC when an escalation provider is detected
+var ESCALATION_CC_EMAILS = ["hostmaster@ovh.net", "security@ovh.net"];
 // ============================================================
 // MAIN LOOP
 // ============================================================
@@ -117,7 +122,21 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     Logger.log("--> PER-PROVIDER LIMIT REACHED | msgId=" + message.getId() + " | " + providerKey);
     return;
   }
+
+  // --- ESCALATION LOGIC ---
+  var finalToAddress = abuseRecipient;
+  var bccAddresses = "";
+  var providerLower = (result.provider || "").toLowerCase();
   
+  var isEscalationTarget = ESCALATION_PROVIDERS.some(function(ep) {
+    return providerLower.indexOf(ep) !== -1;
+  });
+
+  if (isEscalationTarget) {
+    bccAddresses = ESCALATION_CC_EMAILS.join(",");
+    Logger.log("--> ESCALATION TRIGGERED for provider: " + result.provider + " | BCCing: " + bccAddresses);
+  }
+
   // Build email payload
   var subjectPrefix = evalResult.category === "phishing" ? "PHISHING Notice" : "SPAM Notice";
   var emailBody = "Dear Network Abuse Department,\n";
@@ -132,20 +151,25 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     headers: { "Auto-Submitted": "auto-generated", "X-Abuse-Report": "true" }
   };
   
+  // Add BCC option only if we have escalation addresses
+  if (bccAddresses) {
+    sendOptions.bcc = bccAddresses;
+  }
+
   if (USE_ARF_ATTACHMENT) {
     var arfBlob = buildArfBlob(result, evalResult, subject, rawHeader);
     if (arfBlob) sendOptions.attachments.push(arfBlob);
   }
 
-  // Attempt to send with retry BEFORE trashing
-  var success = sendEmailWithRetry(abuseRecipient, subjectPrefix, emailBody, sendOptions, 3);
+  // Attempt to send with retry BEFORE trashing (Critical Safety Fix)
+  var success = sendEmailWithRetry(finalToAddress, subjectPrefix, emailBody, sendOptions, 3);
   
   if (success) {
     message.moveToTrash();
-    Logger.log("--> REPORT SENT | msgId=" + message.getId() + " to=" + abuseRecipient + " provider=" + result.provider + " ip=" + result.ip + " score=" + evalResult.score + " | MESSAGE TRASHED");
+    Logger.log("--> REPORT SENT | msgId=" + message.getId() + " to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " score=" + evalResult.score + " | MESSAGE TRASHED");
   } else {
     thread.addLabel(reviewLabel);
-    Logger.log("--> SEND FAILED after retries | msgId=" + message.getId() + " to=" + abuseRecipient + " | Email KEPT in spam for manual review.");
+    Logger.log("--> SEND FAILED after retries | msgId=" + message.getId() + " to=" + finalToAddress + " | Email KEPT in spam for manual review.");
   }
 }
 
