@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.3.1
+ * ABUSE REPORTER - v1.3.1 (Final Consolidated Release)
  * ============================================================
  */
 
@@ -50,6 +50,9 @@ var PERSISTENT_CACHE = {};
 // Internal variable: flag to prevent unnecessary Script Property writes if the cache hasn't changed. Do not modify.
 var CACHE_DIRTY = false;
 
+// If true, the script will evaluate and log actions but will NOT send emails or move messages to trash.
+var DRY_RUN = false;
+
 // --- ESCALATION CONFIGURATION ---
 
 // Providers known for poor or automated-only abuse responses. Add lowercase substrings.
@@ -57,6 +60,7 @@ var ESCALATION_PROVIDERS = ["ovh", "ovhcloud", "ovh.net", "kimsufi", "soyoustart
 
 // Additional email addresses to BCC when an escalation provider is detected, to increase visibility.
 var ESCALATION_CC_EMAILS = ["hostmaster@ovh.net", "security@ovh.net"];
+
 // ============================================================
 // MAIN LOOP
 // ============================================================
@@ -76,16 +80,23 @@ function processAndSendAbuseReports() {
 }
 
 function runAbuseReportPass() {
+  if (!validateConfiguration()) {
+    Logger.log("Aborting execution due to configuration issues. Please check CONFIG variables.");
+    return;
+  }
+
   var threads = GmailApp.search("in:spam", 0, MAX_THREADS_PER_RUN);
   if (threads.length === 0) {
     Logger.log("No emails found in spam.");
     return;
   }
+  
   PERSISTENT_CACHE = loadPersistentCache();
   var myPublicIp = getMyPublicIp();
   if (myPublicIp) {
     Logger.log("Current execution public IP: " + myPublicIp);
   }
+  
   var sentToProvider = {};
   var reviewLabel = getOrCreateLabel("Abuse/NeedsReview");
   var fpLabel = getOrCreateLabel("Abuse/LikelyFalsePositive");
@@ -109,7 +120,6 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
   var bodyText = getMessageBodyText(message);
   var subject = message.getSubject();
   
-  // Use decoded From for accurate analysis, keep raw for fallback
   var fromDecoded = message.getFrom(); 
   var fromRawMatch = rawHeader.match(/^From:[^\n]*/mi);
   var fromRaw = fromRawMatch ? fromRawMatch[0].replace(/^From:\s*/i, "") : "";
@@ -167,13 +177,8 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     Logger.log("--> ESCALATION TRIGGERED for provider: " + result.provider + " | BCCing: " + bccAddresses);
   }
 
-  // Build email payload
-  var subjectPrefix = evalResult.category === "phishing" ? "PHISHING Notice" : "SPAM Notice";
-  var emailBody = "Dear Network Abuse Department,\n";
-  if (evalResult.category === "phishing") {
-    emailBody += "WARNING: This email appears to be a PHISHING attempt.\nIndicators: " + evalResult.reasons.join(", ") + "\n";
-  }
-  emailBody += "Reporting spam/abusive activity from your network.\nSource IP: " + result.ip + "\nForward type: " + (result.forwardType || "direct") + "\nOriginal Subject: " + subject + "\nFull headers attached.\nRegards,\nAutomated Abuse Reporter";
+  // Build email payload using helper
+  var emailData = buildEmailBody(evalResult, result, subject);
   
   var sendOptions = {
     attachments: [Utilities.newBlob(rawHeader + "\n" + bodyText, "text/plain", "abuse_report_header.txt")],
@@ -181,7 +186,6 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     headers: { "Auto-Submitted": "auto-generated", "X-Abuse-Report": "true" }
   };
   
-  // Add BCC option only if we have escalation addresses
   if (bccAddresses) {
     sendOptions.bcc = bccAddresses;
   }
@@ -191,19 +195,41 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     if (arfBlob) sendOptions.attachments.push(arfBlob);
   }
 
-  // Attempt to send with retry BEFORE trashing (Critical Safety Fix)
-  var success = sendEmailWithRetry(finalToAddress, subjectPrefix, emailBody, sendOptions, 3);
+  // Attempt to send with retry BEFORE trashing
+  var success = sendEmailWithRetry(finalToAddress, emailData.subject, emailData.body, sendOptions, 3);
   
   if (success) {
-    message.moveToTrash();
-    Logger.log("--> REPORT SENT | msgId=" + message.getId() + " to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " score=" + evalResult.score + " | MESSAGE TRASHED");
+    if (DRY_RUN) {
+      Logger.log("--> DRY RUN: Would have sent report to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " | MESSAGE KEPT IN SPAM");
+    } else {
+      message.moveToTrash();
+      Logger.log("--> REPORT SENT | msgId=" + message.getId() + " to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " score=" + evalResult.score + " | MESSAGE TRASHED");
+    }
   } else {
     thread.addLabel(reviewLabel);
     Logger.log("--> SEND FAILED after retries | msgId=" + message.getId() + " to=" + finalToAddress + " | Email KEPT in spam for manual review.");
   }
 }
 
-// Helper to send email with retry, returns true only on success
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+function buildEmailBody(evalResult, result, subject) {
+  var subjectPrefix = evalResult.category === "phishing" ? "PHISHING Notice" : "SPAM Notice";
+  var body = "Dear Network Abuse Department,\n\n";
+  if (evalResult.category === "phishing") {
+    body += "WARNING: This email appears to be a PHISHING attempt.\n";
+    body += "Indicators: " + evalResult.reasons.join(", ") + "\n\n";
+  }
+  body += "Reporting spam/abusive activity from your network.\n";
+  body += "Source IP: " + result.ip + "\n";
+  body += "Forward type: " + (result.forwardType || "direct") + "\n";
+  body += "Original Subject: " + subject + "\n";
+  body += "\nDetailed Reasons:\n" + evalResult.reasons.join("\n") + "\n";
+  body += "\nFull headers attached.\n\nRegards,\nAutomated Abuse Reporter";
+  return { subject: subjectPrefix, body: body };
+}
+
 function sendEmailWithRetry(to, subject, body, options, maxRetries) {
   maxRetries = maxRetries || 3;
   var attempt = 0;
@@ -220,9 +246,21 @@ function sendEmailWithRetry(to, subject, body, options, maxRetries) {
   return false;
 }
 
-// ============================================================
-// SHARED STATE HELPERS
-// ============================================================
+function validateConfiguration() {
+  var issues = [];
+  if (ENABLE_SHEET_LOG && !LOG_SHEET_ID) {
+    issues.push("ENABLE_SHEET_LOG is true but LOG_SHEET_ID is empty.");
+  }
+  if (ESCALATION_CC_EMAILS.length > 0 && ESCALATION_PROVIDERS.length === 0) {
+    issues.push("Escalation CC emails are set, but ESCALATION_PROVIDERS list is empty.");
+  }
+  if (issues.length > 0) {
+    Logger.log("CONFIGURATION ISSUES DETECTED: " + issues.join(" | "));
+    return false;
+  }
+  return true;
+}
+
 function getMyPublicIp() {
   var res = fetchWithRetry("https://api.ipify.org?format=json", { muteHttpExceptions: true }, 2);
   if (res && res.getResponseCode() === 200) {
@@ -285,7 +323,7 @@ function loadPersistentCache() {
 }
 
 function savePersistentCache(cache) {
-  if (!CACHE_DIRTY) return; // Skip write if cache was not modified
+  if (!CACHE_DIRTY) return;
   try {
     var keys = Object.keys(cache);
     if (keys.length > CACHE_MAX_ENTRIES) {
@@ -293,7 +331,7 @@ function savePersistentCache(cache) {
       keys.slice(0, keys.length - CACHE_MAX_ENTRIES).forEach(function(k) { delete cache[k]; });
     }
     PropertiesService.getScriptProperties().setProperty(CACHE_PROPERTY_KEY, JSON.stringify(cache));
-    CACHE_DIRTY = false; // Reset flag after successful save
+    CACHE_DIRTY = false;
   } catch (e) {
     Logger.log("Could not persist lookup cache: " + e.toString());
   }
@@ -398,7 +436,7 @@ function extractInlineForwardedHeaderBlock(bodyText) {
 }
 
 // ============================================================
-// IP EXTRACTION
+// IP EXTRACTION (Fixed for Forwarded Emails)
 // ============================================================
 function extractIpFromHeader(textToScan) {
   if (!textToScan) return null;
@@ -407,7 +445,6 @@ function extractIpFromHeader(textToScan) {
   var regIp6 = "(?:(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?:(?::[0-9a-fA-F]{1,4}){1,6})|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(?::[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(?:ffff(?::0{1,4}){0,1}:){0,1}(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])|(?:[0-9a-fA-F]{1,4}:){1,4}:(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9]))";
   var regIp = "(?:" + regIp4 + "|" + regIp6 + ")";
   var lines = text.split("\n");
-  
   var candidateIps = [];
 
   // Scan top-to-bottom to find the oldest (originating) Received header
@@ -416,16 +453,10 @@ function extractIpFromHeader(textToScan) {
     if (/^Received:\s*/i.test(lines[i])) {
       // Priority A: IP inside square brackets [x.x.x.x] or [IPv6]
       var bracketMatch = lines[i].match(/\[([^\]]+)\]/);
-      if (bracketMatch) {
-        var candidate = bracketMatch[1];
-        if (isValidIpFormat(candidate)) {
-          var cleaned = cleanIp(candidate);
-          if (!isExcludedIp(cleaned)) {
-            candidateIps.push(cleaned);
-          }
-        }
+      if (bracketMatch && isValidIpFormat(bracketMatch[1])) {
+        var cleaned = cleanIp(bracketMatch[1]);
+        if (!isExcludedIp(cleaned)) candidateIps.push(cleaned);
       }
-      
       // Priority B: Any valid IP in the line
       var matches = lines[i].match(new RegExp(regIp, "gi"));
       if (matches) {
@@ -440,11 +471,9 @@ function extractIpFromHeader(textToScan) {
       }
     }
   }
-
+  
   // The originating IP is the LAST valid candidate found (oldest Received header)
-  if (candidateIps.length > 0) {
-    return candidateIps[candidateIps.length - 1];
-  }
+  if (candidateIps.length > 0) return candidateIps[candidateIps.length - 1];
 
   // Fallback 1: X-Originating-IP
   var matchOrig = text.match(new RegExp("X-Originating-IP:\\s*\\[?(" + regIp + ")\\]?", "i"));
@@ -463,7 +492,6 @@ function extractIpFromHeader(textToScan) {
       }
     }
   }
-  
   return null;
 }
 
@@ -520,7 +548,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   headerText = unfoldHeaders(headerText);
   var bodyLower = (bodyText || "").toLowerCase();
   
-  // Extract domain from decoded From for accurate analysis
   var fromMatch = fromDecoded && fromDecoded.match(/"?([^"<]*)"?\s*<([^>]+)>/);
   var displayName = fromMatch ? fromMatch[1].trim() : (fromDecoded || "").trim();
   var fromEmail = (fromMatch ? fromMatch[2] : (fromDecoded || "")).trim().toLowerCase();
@@ -530,14 +557,12 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     return { category: "likely-false-positive", score: 0, reasons: ["Sender domain is in TRUSTED_SENDER_DOMAINS whitelist"], fromDomain: fromDomain };
   }
   
-  // Obfuscation Detection: Spammers use Base64/QP to hide homoglyphs or bypass filters
   if (/=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(subject) || /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(fromDecoded)) {
     score += 2;
     signalCategories.structural = true;
     reasons.push("Obfuscated Base64/Quoted-Printable encoding in From/Subject");
   }
   
-  // Authentication signals
   var authResults = headerText.match(/Authentication-Results:[^\n]*/gi) || [];
   var receivedSpf = headerText.match(/Received-SPF:[^\n]*/gi) || [];
   var allAuthLines = authResults.concat(receivedSpf).join(" ").toLowerCase();
@@ -551,7 +576,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Authentication failed (" + [spfFail && "SPF", dkimFail && "DKIM", dmarcFail && "DMARC"].filter(Boolean).join("/") + ")");
   }
   
-  // Display name impersonating a brand/institution
   var brandNames = ["paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta"];
   brandNames.forEach(function(brand) {
     if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
@@ -561,7 +585,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   });
   
-  // Reply-To different from From
   var replyToMatch = headerText.match(/Reply-To:\s*.*?<?([^\s<>]+@[^\s<>]+)>?/i);
   if (replyToMatch) {
     var replyDomain = (replyToMatch[1].split("@")[1] || "").toLowerCase();
@@ -572,7 +595,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // Standard Keywords: weak signal, capped contribution
   var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
   var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
   var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
@@ -585,11 +607,9 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     if (mrHits.length > 0) reasons.push("Sensitive terms: " + mrHits.join(", "));
   }
 
-  // --- 1. Universal Bulk Spam / Marketing Abuse Detection ---
-  // Works for ANY user, language-agnostic, focuses on structural spam patterns.
+  // --- Universal Bulk Spam / Marketing Abuse Detection ---
   var bulkSpamScore = 0;
   var bulkSpamReasons = [];
-
   if (/[a-zA-Z]+\.[a-zA-Z0-9]{6,}@/.test(fromEmail)) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Randomized string in sender email local part");
@@ -607,15 +627,13 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Spam action keywords combined with encoded subject");
   }
-
   if (bulkSpamScore >= 3) {
     score += bulkSpamScore;
     signalCategories.structural = true;
     reasons = reasons.concat(bulkSpamReasons);
   }
 
-  // --- 2. Sophisticated Marketing / Phishing Spam Detection ---
-  // Catches emails that pass authentication but use generic "reward" or "urgency" hooks.
+  // --- Sophisticated Marketing / Phishing Spam Detection ---
   var sophisticatedSpamKeywords = /\b(reward awaits|exclusive reward|surprise waiting|ready to be claimed|just a click away|claim your reward|account has a surprise|special just for you)\b/i;
   if (sophisticatedSpamKeywords.test(subject + " " + bodyLower)) {
     score += 3;
@@ -623,8 +641,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Generic 'reward' or 'claim' marketing spam pattern detected");
   }
   
-  // --- 3. Universal Classifieds Bot Detection ---
-  // Matches random 6+ letter + 2+ digit free email accounts combined with generic marketplace queries.
+  // --- Universal Classifieds Bot Detection ---
   var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
   var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
   var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
@@ -641,7 +658,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // Punycode/IDN detection
   if (/xn--/i.test(fromDomain)) {
     score += 3;
     signalCategories.structural = true;
@@ -654,7 +670,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Punycode/IDN link(s) in body");
   }
   
-  // Homoglyph mixing detection on decoded display name
   var hasLatin = /[a-z]/i;
   var hasCyrillicOrGreek = /[\u0400-\u04FF\u0370-\u03FF]/;
   if (fromDomain && hasLatin.test(fromDomain) && hasCyrillicOrGreek.test(fromDomain)) {
@@ -668,7 +683,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     reasons.push("Mixed Latin/Cyrillic-Greek characters in display name");
   }
   
-  // Urgency patterns
   if (bodyText) {
     var exclamationRuns = bodyText.match(/!{2,}/g) || [];
     var capsWords = bodyText.match(/\b[A-Z]{4,}\b/g) || [];
@@ -679,7 +693,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // Suspicious links
   if (bodyText && /https?:\/\/\d{1,3}(\.\d{1,3}){3}/.test(bodyText)) {
     score += 2;
     signalCategories.links = true;
@@ -709,7 +722,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     return { category: "likely-false-positive", score: 0, reasons: ["No risk signals detected (score 0)"], fromDomain: fromDomain };
   }
   
-  // Final Classification
   var categoryCount = Object.keys(signalCategories).length;
   var category = (score >= 7 && categoryCount >= 2) ? "phishing" : "spam";
   
