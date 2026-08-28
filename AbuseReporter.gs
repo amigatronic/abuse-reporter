@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.3.0
+ * ABUSE REPORTER - v1.3.1
  * ============================================================
  */
 
@@ -354,39 +354,52 @@ function extractIpFromHeader(textToScan) {
   var regIp = "(?:" + regIp4 + "|" + regIp6 + ")";
   var lines = text.split("\n");
   
-  for (var i = lines.length - 1; i >= 0; i--) {
-    if (/Received:/i.test(lines[i])) {
-      // Priority A: IP inside square brackets (RFC standard)
+  var candidateIps = [];
+
+  // Scan top-to-bottom to find the oldest (originating) Received header
+  for (var i = 0; i < lines.length; i++) {
+    // STRICT match: must start with "Received:" to avoid "Received-SPF" or "X-Received"
+    if (/^Received:\s*/i.test(lines[i])) {
+      // Priority A: IP inside square brackets [x.x.x.x] or [IPv6]
       var bracketMatch = lines[i].match(/\[([^\]]+)\]/);
-      if (bracketMatch && isValidIpFormat(bracketMatch[1])) {
-        var cleaned = cleanIp(bracketMatch[1]);
-        if (!isExcludedIp(cleaned)) return cleaned;
+      if (bracketMatch) {
+        var candidate = bracketMatch[1];
+        if (isValidIpFormat(candidate)) {
+          var cleaned = cleanIp(candidate);
+          if (!isExcludedIp(cleaned)) {
+            candidateIps.push(cleaned);
+          }
+        }
       }
-      // Priority B: client-ip=...
-      var clientIpMatch = lines[i].match(/client-ip=([^\s;]+)/i);
-      if (clientIpMatch && isValidIpFormat(clientIpMatch[1])) {
-        var cleaned2 = cleanIp(clientIpMatch[1]);
-        if (!isExcludedIp(cleaned2)) return cleaned2;
-      }
-      // Priority C: Any valid IP in the line, preferring the LAST one
+      
+      // Priority B: Any valid IP in the line
       var matches = lines[i].match(new RegExp(regIp, "gi"));
       if (matches) {
-        for (var k = matches.length - 1; k >= 0; k--) {
+        for (var k = 0; k < matches.length; k++) {
           if (isValidIpFormat(matches[k])) {
-            var cleaned3 = cleanIp(matches[k]);
-            if (!isExcludedIp(cleaned3)) return cleaned3;
+            var cleanedMatch = cleanIp(matches[k]);
+            if (!isExcludedIp(cleanedMatch) && candidateIps.indexOf(cleanedMatch) === -1) {
+              candidateIps.push(cleanedMatch);
+            }
           }
         }
       }
     }
   }
-  
+
+  // The originating IP is the LAST valid candidate found (oldest Received header)
+  if (candidateIps.length > 0) {
+    return candidateIps[candidateIps.length - 1];
+  }
+
+  // Fallback 1: X-Originating-IP
   var matchOrig = text.match(new RegExp("X-Originating-IP:\\s*\\[?(" + regIp + ")\\]?", "i"));
   if (matchOrig && matchOrig[1] && isValidIpFormat(matchOrig[1])) {
     var ipClean = cleanIp(matchOrig[1]);
     if (!isExcludedIp(ipClean)) return ipClean;
   }
   
+  // Fallback 2: Any IP in the text (last resort)
   var allIps = text.match(new RegExp(regIp, "gi"));
   if (allIps) {
     for (var j = allIps.length - 1; j >= 0; j--) {
@@ -396,6 +409,7 @@ function extractIpFromHeader(textToScan) {
       }
     }
   }
+  
   return null;
 }
 
