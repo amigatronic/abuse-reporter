@@ -85,6 +85,12 @@ function runAbuseReportPass() {
     return;
   }
 
+  // <-- QUOTA CHECK: Blocca l'esecuzione se si supera il limite giornaliero
+  if (!checkDailyQuota()) {
+    Logger.log("Aborting execution due to daily email quota limit reached.");
+    return;
+  }
+
   var threads = GmailApp.search("in:spam", 0, MAX_THREADS_PER_RUN);
   if (threads.length === 0) {
     Logger.log("No emails found in spam.");
@@ -144,6 +150,9 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     return;
   }
   
+  // Intentional design choice: use only the first valid abuse email found.
+  // Using multiple addresses for the same incident often triggers provider spam filters 
+  // or creates duplicate tickets, reducing the chance of human review.
   var abuseRecipient = result.abuseEmails[0];
   if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(abuseRecipient)) {
     Logger.log("--> INVALID ABUSE EMAIL | msgId=" + message.getId() + " | " + abuseRecipient);
@@ -230,6 +239,33 @@ function buildEmailBody(evalResult, result, subject) {
   return { subject: subjectPrefix, body: body };
 }
 
+// Add this helper function near the other shared state helpers
+function checkDailyQuota() {
+  var props = PropertiesService.getScriptProperties();
+  var today = new Date().toDateString();
+  var lastDate = props.getProperty("LAST_RUN_DATE");
+  var count = parseInt(props.getProperty("DAILY_EMAIL_COUNT") || "0", 10);
+  
+  if (lastDate !== today) {
+    props.setProperty("LAST_RUN_DATE", today);
+    props.setProperty("DAILY_EMAIL_COUNT", "0");
+    return true;
+  }
+  
+  // Stop if we hit 80 emails to leave a safety margin for the 100/day Gmail limit
+  if (count >= 80) {
+    Logger.log("--> DAILY QUOTA LIMIT REACHED (80/100). Aborting to preserve account health.");
+    return false;
+  }
+  return true;
+}
+
+function incrementDailyQuota() {
+  var props = PropertiesService.getScriptProperties();
+  var count = parseInt(props.getProperty("DAILY_EMAIL_COUNT") || "0", 10);
+  props.setProperty("DAILY_EMAIL_COUNT", (count + 1).toString());
+}
+
 function sendEmailWithRetry(to, subject, body, options, maxRetries) {
   maxRetries = maxRetries || 3;
   var attempt = 0;
@@ -272,8 +308,20 @@ function getMyPublicIp() {
 function doGet(e) {
   var expected = PropertiesService.getScriptProperties().getProperty(DOGET_SECRET_PROPERTY);
   var provided = e && e.parameter ? e.parameter.token : null;
+  
   if (!expected) return HtmlService.createHtmlOutput("Web trigger disabled: no secret set in Script Properties.");
-  if (!provided || provided !== expected) return HtmlService.createHtmlOutput("Unauthorized.");
+  if (!provided) return HtmlService.createHtmlOutput("Unauthorized.");
+  
+  // Constant-time-like comparison to prevent timing attacks
+  if (provided.length !== expected.length) return HtmlService.createHtmlOutput("Unauthorized.");
+  var isValid = true;
+  for (var i = 0; i < provided.length; i++) {
+    if (provided.charCodeAt(i) !== expected.charCodeAt(i)) {
+      isValid = false;
+    }
+  }
+  if (!isValid) return HtmlService.createHtmlOutput("Unauthorized.");
+
   try {
     processAndSendAbuseReports();
     return HtmlService.createHtmlOutput('<html><body style="font-family: Arial; padding: 20px;"><h2>Execution completed</h2><p>Check the logs for details.</p></body></html>');
