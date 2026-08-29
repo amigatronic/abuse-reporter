@@ -56,7 +56,11 @@ This script evolved through real-world testing against sophisticated spam campai
 - **v1.1.2** — reliability hardening: retry logic before trashing, `CACHE_DIRTY` flag for quota optimization, 30s network timeouts, Message ID logging.
 - **v1.2.0** — universal classifieds bot detection (burner email patterns + generic marketplace queries in DE/IT/EN/FR).
 - **v1.3.0** — unified universal detection & critical safeguards: structural bulk spam detection, sophisticated phishing hooks, and strict zero-score false-positive prevention.
-- **v1.3.1** — **CRITICAL FIXES**: Accurate originating IP extraction for forwarded emails (strict `^Received:` parsing, ignoring `Received-SPF`) and automatic BCC escalation for unresponsive hosting providers (e.g., OVH).
+- **v1.3.1** — **Final Consolidated Release**: 
+  - **Critical IP Extraction Fix**: Strict bracketed IP matching in `Received:` headers to prevent reverse-DNS hostname false positives (e.g., ignoring `247.166.9.5` in favor of `[5.9.166.247]`).
+  - **Reserved IP Exclusion**: Added blocking for multicast/reserved IP ranges (octet >= 224) to prevent futile RDAP lookups.
+  - **Operational Safety**: Added `DRY_RUN` mode for risk-free testing, `validateConfiguration()` to prevent silent setup errors, and modularized `buildEmailBody()` for cleaner payload generation.
+  - Fixed UTF-8 encoding artifacts in regex patterns.
 
 ## Installation
 
