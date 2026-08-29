@@ -1,3 +1,5 @@
+![Abuse Reporter Banner](banner.png)
+
 # Abuse Reporter
 
 **Stop accepting spam passively. Fight back automatically.**
