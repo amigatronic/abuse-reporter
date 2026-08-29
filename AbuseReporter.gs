@@ -455,9 +455,13 @@ function extractIpFromHeader(textToScan) {
       var bracketMatch = lines[i].match(/\[([^\]]+)\]/);
       if (bracketMatch && isValidIpFormat(bracketMatch[1])) {
         var cleaned = cleanIp(bracketMatch[1]);
-        if (!isExcludedIp(cleaned)) candidateIps.push(cleaned);
+        if (!isExcludedIp(cleaned)) {
+          candidateIps.push(cleaned);
+          continue; // TRUST THE BRACKETED IP: skip hostname false positives for this hop
+        }
       }
-      // Priority B: Any valid IP in the line
+      
+      // Priority B: Any valid IP in the line (fallback if no bracketed IP)
       var matches = lines[i].match(new RegExp(regIp, "gi"));
       if (matches) {
         for (var k = 0; k < matches.length; k++) {
@@ -532,6 +536,11 @@ function isExcludedIp(ip) {
   if (lowerIp.indexOf("172.") === 0) {
     var parts = lowerIp.split(".");
     if (parts.length >= 2) { var second = parseInt(parts[1], 10); if (second >= 16 && second <= 31) return true; }
+  }
+  // Exclude Multicast (224-239) and Reserved/Future Use (240-255)
+  if (lowerIp.indexOf(".") !== -1) {
+    var firstOctet = parseInt(lowerIp.split(".")[0], 10);
+    if (firstOctet >= 224) return true;
   }
   if (lowerIp.indexOf("fe80:") === 0 || lowerIp.indexOf("fc00:") === 0 || lowerIp.indexOf("fd00:") === 0 || lowerIp.indexOf("2002:") === 0) return true;
   if (lowerIp.indexOf("209.85.") === 0 || lowerIp.indexOf("195.130.225.") === 0 || lowerIp.indexOf("37.163.") === 0) return true;
