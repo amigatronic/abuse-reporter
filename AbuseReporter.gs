@@ -7,7 +7,6 @@
 // ============================================================
 // CONFIGURATION
 // ============================================================
-
 // Maximum number of spam threads to process in a single execution run.
 var MAX_THREADS_PER_RUN = 30;
 
@@ -54,7 +53,6 @@ var CACHE_DIRTY = false;
 var DRY_RUN = false;
 
 // --- ESCALATION CONFIGURATION ---
-
 // Providers known for poor or automated-only abuse responses. Add lowercase substrings.
 var ESCALATION_PROVIDERS = ["ovh", "ovhcloud", "ovh.net", "kimsufi", "soyoustart"];
 
@@ -85,7 +83,7 @@ function runAbuseReportPass() {
     return;
   }
 
-  // <-- QUOTA CHECK: Blocca l'esecuzione se si supera il limite giornaliero
+  // <-- QUOTA CHECK: Abort execution if daily limit is reached
   if (!checkDailyQuota()) {
     Logger.log("Aborting execution due to daily email quota limit reached.");
     return;
@@ -204,13 +202,21 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
     if (arfBlob) sendOptions.attachments.push(arfBlob);
   }
 
-  // Attempt to send with retry BEFORE trashing
-  var success = sendEmailWithRetry(finalToAddress, emailData.subject, emailData.body, sendOptions, 3);
-  
-  if (success) {
-    if (DRY_RUN) {
-      Logger.log("--> DRY RUN: Would have sent report to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " | MESSAGE KEPT IN SPAM");
-    } else {
+  var sendSuccess = false;
+
+  if (DRY_RUN) {
+    // In dry run mode, simulate success without actually sending the email
+    Logger.log("--> DRY RUN: Simulating report to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " | MESSAGE KEPT IN SPAM");
+    sendSuccess = true; 
+  } else {
+    // Attempt to send with retry BEFORE trashing (Critical Safety Fix)
+    sendSuccess = sendEmailWithRetry(finalToAddress, emailData.subject, emailData.body, sendOptions, 3);
+  }
+
+  if (sendSuccess) {
+    if (!DRY_RUN) {
+      // Increment daily quota counter ONLY for real sends
+      incrementDailyQuota();
       message.moveToTrash();
       Logger.log("--> REPORT SENT | msgId=" + message.getId() + " to=" + finalToAddress + (bccAddresses ? " bcc=" + bccAddresses : "") + " provider=" + result.provider + " ip=" + result.ip + " score=" + evalResult.score + " | MESSAGE TRASHED");
     }
@@ -239,13 +245,13 @@ function buildEmailBody(evalResult, result, subject) {
   return { subject: subjectPrefix, body: body };
 }
 
-// Add this helper function near the other shared state helpers
 function checkDailyQuota() {
   var props = PropertiesService.getScriptProperties();
   var today = new Date().toDateString();
   var lastDate = props.getProperty("LAST_RUN_DATE");
   var count = parseInt(props.getProperty("DAILY_EMAIL_COUNT") || "0", 10);
   
+  // Reset counter if it's a new day
   if (lastDate !== today) {
     props.setProperty("LAST_RUN_DATE", today);
     props.setProperty("DAILY_EMAIL_COUNT", "0");
@@ -492,13 +498,28 @@ function extractIpFromHeader(textToScan) {
   var regIp4 = "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b";
   var regIp6 = "(?:(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?:(?::[0-9a-fA-F]{1,4}){1,6})|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(?::[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(?:ffff(?::0{1,4}){0,1}:){0,1}(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])|(?:[0-9a-fA-F]{1,4}:){1,4}:(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9]))";
   var regIp = "(?:" + regIp4 + "|" + regIp6 + ")";
+
+  // PRIORITY 1: Extract the verified client-ip from SPF/Authentication-Results.
+  // This is the IP that Google actually accepted the connection from, making it immune to forged Received headers.
+  var spfMatch = text.match(/client-ip=([^\s;]+)/i);
+  if (spfMatch && spfMatch[1]) {
+    var cleanedSpfIp = cleanIp(spfMatch[1]);
+    if (isValidIpFormat(cleanedSpfIp) && !isExcludedIp(cleanedSpfIp)) {
+      return cleanedSpfIp;
+    }
+  }
+
   var lines = text.split("\n");
   var candidateIps = [];
 
-  // Scan top-to-bottom to find the oldest (originating) Received header
+  // PRIORITY 2: Scan Received headers top-to-bottom.
   for (var i = 0; i < lines.length; i++) {
-    // STRICT match: must start with "Received:" to avoid "Received-SPF" or "X-Received"
     if (/^Received:\s*/i.test(lines[i])) {
+      // Skip obviously malformed or forged headers (e.g., containing javascript or missing standard MTA formatting)
+      if (/javascript:/i.test(lines[i]) || !/\s+by\s+/i.test(lines[i])) {
+        continue;
+      }
+
       // Priority A: IP inside square brackets [x.x.x.x] or [IPv6]
       var bracketMatch = lines[i].match(/\[([^\]]+)\]/);
       if (bracketMatch && isValidIpFormat(bracketMatch[1])) {
@@ -509,7 +530,7 @@ function extractIpFromHeader(textToScan) {
         }
       }
       
-      // Priority B: Any valid IP in the line (fallback if no bracketed IP)
+      // Priority B: Any valid IP in the line
       var matches = lines[i].match(new RegExp(regIp, "gi"));
       if (matches) {
         for (var k = 0; k < matches.length; k++) {
@@ -595,9 +616,6 @@ function isExcludedIp(ip) {
   return false;
 }
 
-// ============================================================
-// PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
-// ============================================================
 // ============================================================
 // PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
 // ============================================================
@@ -713,7 +731,8 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   // 9. Universal Classifieds Bot Detection
   var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
   var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
-  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i; var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
+  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
+  var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
   var isVeryShortBody = bodyText && bodyText.replace(/\s/g, '').length < 150;
 
   if (isFreeProvider && isBurnerEmail && hasGenericQuery) {
@@ -726,7 +745,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
   
-  // 10. Suspicious Domain Structure & Display Name Mismatch (NEW)
+  // 10. Suspicious Domain Structure & Display Name Mismatch
   var domainParts = fromDomain.split('.');
   if (domainParts.length >= 5) {
     score += 3;
@@ -749,7 +768,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     }
   }
 
-  // 11. Expanded Payment/Account Phishing Keywords (NEW)
+  // 11. Expanded Payment/Account Phishing Keywords
   var extendedPhishingKeywords = /\b(payment failed|update payment|subscription renewal|cloud storage|account suspended|verify your identity|urgent action|required action)\b/i;
   if (extendedPhishingKeywords.test(subject + " " + bodyLower)) {
     score += 2;
@@ -850,9 +869,6 @@ function isSafeAbuseTarget(ip, abuseEmails, senderDomain) {
   
   return true;
 }
-
-
-
 
 // ============================================================
 // OPTIONAL: ARF (RFC 5965) FEEDBACK-REPORT ATTACHMENT
