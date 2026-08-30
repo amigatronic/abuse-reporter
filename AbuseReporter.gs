@@ -498,22 +498,12 @@ function extractIpFromHeader(textToScan) {
   var regIp4 = "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b";
   var regIp6 = "(?:(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?:(?::[0-9a-fA-F]{1,4}){1,6})|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(?::[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(?:ffff(?::0{1,4}){0,1}:){0,1}(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])|(?:[0-9a-fA-F]{1,4}:){1,4}:(?:(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(?:25[0-5]|(?:2[0-4]|1{0,1}[0-9]){0,1}[0-9]))";
   var regIp = "(?:" + regIp4 + "|" + regIp6 + ")";
-
-  // PRIORITY 1: Extract the verified client-ip from SPF/Authentication-Results.
-  // This is the IP that Google actually accepted the connection from, making it immune to forged Received headers.
-  var spfMatch = text.match(/client-ip=([^\s;]+)/i);
-  if (spfMatch && spfMatch[1]) {
-    var cleanedSpfIp = cleanIp(spfMatch[1]);
-    if (isValidIpFormat(cleanedSpfIp) && !isExcludedIp(cleanedSpfIp)) {
-      return cleanedSpfIp;
-    }
-  }
-
   var lines = text.split("\n");
   var candidateIps = [];
 
-  // PRIORITY 2: Scan Received headers top-to-bottom.
+  // Scan top-to-bottom to find the oldest (originating) Received header
   for (var i = 0; i < lines.length; i++) {
+    // STRICT match: must start with "Received:" to avoid "Received-SPF" or "X-Received"
     if (/^Received:\s*/i.test(lines[i])) {
       // Skip obviously malformed or forged headers (e.g., containing javascript or missing standard MTA formatting)
       if (/javascript:/i.test(lines[i]) || !/\s+by\s+/i.test(lines[i])) {
@@ -530,7 +520,7 @@ function extractIpFromHeader(textToScan) {
         }
       }
       
-      // Priority B: Any valid IP in the line
+      // Priority B: Any valid IP in the line (fallback if no bracketed IP)
       var matches = lines[i].match(new RegExp(regIp, "gi"));
       if (matches) {
         for (var k = 0; k < matches.length; k++) {
@@ -546,6 +536,7 @@ function extractIpFromHeader(textToScan) {
   }
   
   // The originating IP is the LAST valid candidate found (oldest Received header)
+  // In your example, this will correctly skip 10.x.x.x (private) and return 144.217.45.24
   if (candidateIps.length > 0) return candidateIps[candidateIps.length - 1];
 
   // Fallback 1: X-Originating-IP
