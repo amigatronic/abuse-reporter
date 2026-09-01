@@ -53,11 +53,18 @@ var CACHE_DIRTY = false;
 var DRY_RUN = false;
 
 // --- ESCALATION CONFIGURATION ---
-// Providers known for poor or automated-only abuse responses. Add lowercase substrings.
-var ESCALATION_PROVIDERS = ["ovh", "ovhcloud", "ovh.net", "kimsufi", "soyoustart"];
+// Maps provider keywords to their specific escalation CC emails.
+// This prevents mixing up escalation contacts (e.g., sending OVH emails to Alibaba).
+var ESCALATION_RULES = {
+  "ovh": ["hostmaster@ovh.net", "security@ovh.net"],
+  "ovhcloud": ["hostmaster@ovh.net", "security@ovh.net"],
+  "ovh.net": ["hostmaster@ovh.net", "security@ovh.net"],
+  "kimsufi": ["hostmaster@ovh.net", "security@ovh.net"],
+  "soyoustart": ["hostmaster@ovh.net", "security@ovh.net"],
+  "alibaba": ["abuse-report@alibabacloud.com", "security@alibaba-inc.com"],
+  "aliyun": ["abuse-report@alibabacloud.com", "security@alibaba-inc.com"]
+};
 
-// Additional email addresses to BCC when an escalation provider is detected, to increase visibility.
-var ESCALATION_CC_EMAILS = ["hostmaster@ovh.net", "security@ovh.net"];
 
 // ============================================================
 // MAIN LOOP
@@ -174,14 +181,16 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
   var finalToAddress = abuseRecipient;
   var bccAddresses = "";
   var providerLower = (result.provider || "").toLowerCase();
-  
-  var isEscalationTarget = ESCALATION_PROVIDERS.some(function(ep) {
-    return providerLower.indexOf(ep) !== -1;
-  });
+  var isEscalationTarget = false;
 
-  if (isEscalationTarget) {
-    bccAddresses = ESCALATION_CC_EMAILS.join(",");
-    Logger.log("--> ESCALATION TRIGGERED for provider: " + result.provider + " | BCCing: " + bccAddresses);
+  // Check against the mapping to ensure correct CC emails for each provider
+  for (var keyword in ESCALATION_RULES) {
+    if (providerLower.indexOf(keyword) !== -1) {
+      isEscalationTarget = true;
+      bccAddresses = ESCALATION_RULES[keyword].join(",");
+      Logger.log("--> ESCALATION TRIGGERED for provider: " + result.provider + " (matched keyword: '" + keyword + "') | BCCing: " + bccAddresses);
+      break; // Stop at the first match to avoid overwriting
+    }
   }
 
   // Build email payload using helper
@@ -293,8 +302,9 @@ function validateConfiguration() {
   if (ENABLE_SHEET_LOG && !LOG_SHEET_ID) {
     issues.push("ENABLE_SHEET_LOG is true but LOG_SHEET_ID is empty.");
   }
-  if (ESCALATION_CC_EMAILS.length > 0 && ESCALATION_PROVIDERS.length === 0) {
-    issues.push("Escalation CC emails are set, but ESCALATION_PROVIDERS list is empty.");
+  // Check if ESCALATION_RULES is properly defined and not empty
+  if (typeof ESCALATION_RULES !== 'object' || Object.keys(ESCALATION_RULES).length === 0) {
+    issues.push("ESCALATION_RULES is missing or empty.");
   }
   if (issues.length > 0) {
     Logger.log("CONFIGURATION ISSUES DETECTED: " + issues.join(" | "));
