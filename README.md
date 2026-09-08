@@ -48,33 +48,6 @@ Many users consolidate multiple email accounts into Gmail using automatic forwar
 3. Extracting the true originating IP from the original `Received:` headers.
 4. Looking up the abuse contact for the *original* spam source, not the forwarding provider.
 
-## Evolution and hardening
-
-This script evolved through real-world testing against sophisticated spam campaigns:
-
-- **v1.0** — basic IP extraction and reporting.
-- **v1.1** — fixed IPv4-mapped IPv6 handling, replaced `ip-api.com` with HTTPS-compatible `ipwho.is`, removed false-positive override for authenticated spam.
-- **v1.1.1** — added Base64/Quoted-Printable obfuscation detection, increased scoring for mixed-character-set attacks.
-- **v1.1.2** — reliability hardening: retry logic before trashing, `CACHE_DIRTY` flag for quota optimization, 30s network timeouts, Message ID logging.
-- **v1.2.0** — universal classifieds bot detection (burner email patterns + generic marketplace queries in DE/IT/EN/FR).
-- **v1.3.0** — unified universal detection & critical safeguards: structural bulk spam detection, sophisticated phishing hooks, and strict zero-score false-positive prevention.
-- **v1.3.1** — **Final Consolidated Release**: 
-  - **Critical IP Extraction Fix**: Strict bracketed IP matching in `Received:` headers to prevent reverse-DNS hostname false positives (e.g., ignoring `247.166.9.5` in favor of `[5.9.166.247]`).
-  - **Reserved IP Exclusion**: Added blocking for multicast/reserved IP ranges (octet >= 224) to prevent futile RDAP lookups.
-  - **Operational Safety**: Added `DRY_RUN` mode for risk-free testing, `validateConfiguration()` to prevent silent setup errors, and modularized `buildEmailBody()` for cleaner payload generation.
-  - Fixed UTF-8 encoding artifacts in regex patterns.
- - **v1.4.0**
-- **Advanced Bayesian Poisoning Detection**: Now detects and penalizes massive blocks of randomized alphanumeric strings (gibberish) used to bypass spam filters.
-- **Cloud Hosting Abuse Detection**: Added specific rules to flag legitimate cloud storage domains (e.g., `storage.googleapis.com`, `drive.google.com`) when used to host random `.html` phishing pages.
-- **Expanded Brand Impersonation List**: Added detection for "State Farm", "Enterprise", "YNAB", "Tim", "Vodafone", "Enel", "Eni", "Ebay", "Subito", "Sda", "Brt", and "Gls".
-- **Urgency + Gift Pattern Recognition**: New heuristic that triggers a high penalty when urgency triggers (e.g., "final notice", "expires in") are combined with free gift claims.
-- **Outgoing Email Sanitization**: The report body now automatically obscures active malicious URLs (`[LINK REMOVED FOR SAFETY]`) to prevent Gmail's outbound filters from blocking the abuse report itself, while keeping the full headers attached as proof.
-- Resolved `ReferenceError: isSafeAbuseTarget is not defined` by ensuring the function is properly declared and scoped.
-- Fixed cross-provider escalation contamination by replacing global `ESCALATION_PROVIDERS` arrays with a strict `ESCALATION_RULES` mapping object. This ensures OVH escalation emails are never accidentally sent to Alibaba, and vice versa.
-- Updated `validateConfiguration` to explicitly check for the presence of `ESCALATION_RULES`.
-- Improved logging clarity for escalation triggers, now specifying which keyword matched the provider.
-
-
 ## Installation
 
 1. Go to [script.google.com](https://script.google.com) and click **New project**.
