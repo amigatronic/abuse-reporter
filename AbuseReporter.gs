@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.4.0
+ * ABUSE REPORTER - v1.4.2
  * ============================================================
  */
 
@@ -135,7 +135,7 @@ function processOneMessage(thread, message, myPublicIp, sentToProvider, reviewLa
   var fromRawMatch = rawHeader.match(/^From:[^\n]*/mi);
   var fromRaw = fromRawMatch ? fromRawMatch[0].replace(/^From:\s*/i, "") : "";
   
-  var evalResult = evaluateMessage(rawHeader, bodyText, subject, fromDecoded, fromRaw);
+  var evalResult = evaluateMessage(rawHeader, bodyText, subject, fromDecoded, fromRaw, rawContent);
   logToSheet([new Date(), evalResult.category, evalResult.score, subject, fromDecoded]);
   
   if (evalResult.category === "likely-false-positive") {
@@ -620,7 +620,7 @@ function isExcludedIp(ip) {
 // ============================================================
 // PHISHING / SPAM / FALSE POSITIVE CLASSIFICATION
 // ============================================================
-function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
+function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, rawContent) {
   var reasons = [];
   var score = 0;
   var signalCategories = {};
@@ -628,22 +628,22 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   headerText = unfoldHeaders(headerText);
   var bodyLower = (bodyText || "").toLowerCase();
   
-  // Extract domain from decoded From for accurate analysis
   var fromMatch = fromDecoded && fromDecoded.match(/"?([^"<]*)"?\s*<([^>]+)>/);
   var displayName = fromMatch ? fromMatch[1].trim() : (fromDecoded || "").trim();
   var fromEmail = (fromMatch ? fromMatch[2] : (fromDecoded || "")).trim().toLowerCase();
   var fromDomain = (fromEmail.split("@")[1] || "").toLowerCase();
+  var emailLocalPart = fromEmail.split('@')[0];
 
   // 1. Trusted Domain Check
   if (fromDomain && TRUSTED_SENDER_DOMAINS.indexOf(fromDomain) !== -1) {
     return { category: "likely-false-positive", score: 0, reasons: ["Sender domain is in TRUSTED_SENDER_DOMAINS whitelist"], fromDomain: fromDomain };
   }
 
-  // 2. Obfuscation Detection
-  if (/=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(subject) || /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(fromDecoded)) {
+  // 2. Obfuscation Detection (FIXED: Check raw header, not decoded GAS variables)
+  if (/=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(headerText)) {
     score += 2;
     signalCategories.structural = true;
-    reasons.push("Obfuscated Base64/Quoted-Printable encoding in From/Subject");
+    reasons.push("Obfuscated Base64/Quoted-Printable encoding detected in raw headers");
   }
 
   // 3. Authentication signals
@@ -660,7 +660,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
   }
 
   // 4. Display name impersonating a brand/institution (EXPANDED)
-  var brandNames = ["decathlon", "state farm", "state-farm", "enterprise", "ynab", "paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta", "tim", "vodafone", "enel", "eni", "ebay", "subito", "sda", "brt", "gls"];
+  var brandNames = ["decathlon", "state farm", "state-farm", "enterprise", "ynab", "novapay", "paypal", "amazon", "poste", "posteitaliane", "intesa", "unicredit", "microsoft", "google", "apple", "netflix", "dhl", "fedex", "ups", "agenzia delle entrate", "inps", "aruba", "bancoposta", "tim", "vodafone", "enel", "eni", "ebay", "subito", "sda", "brt", "gls"];
   brandNames.forEach(function(brand) {
     if (displayName.toLowerCase().indexOf(brand) !== -1 && fromDomain.indexOf(brand) === -1) {
       score += 3;
@@ -708,7 +708,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     bulkSpamReasons.push("Suspicious fake physical address pattern (CAN-SPAM template)");
   }
   var spamActionKeywords = /\b(vincitore|winner|gewinner|gagnant|spedizione|shipping|livraison|consegna|pacco|package|paket|colis|trapano|dexeter|account|sospeso|suspended)\b/i;
-  if (spamActionKeywords.test(subject + " " + bodyLower) && /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(subject)) {
+  if (spamActionKeywords.test(subject + " " + bodyLower) && /=\?(?:utf-8|iso-8859-1|windows-1252)\?[bq]\?/i.test(headerText)) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Spam action keywords combined with encoded subject");
   }
@@ -760,11 +760,10 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     signalCategories.structural = true;
     reasons.push("Suspiciously deep subdomain structure (typical of burner domains)");
   }
-  var emailLocalPart = fromEmail.split('@')[0];
   if (displayName && emailLocalPart) {
     var nameClean = displayName.toLowerCase().replace(/\s+/g, '');
     var localClean = emailLocalPart.toLowerCase();
-    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin/i.test(localClean)) {
+    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin|careers|hr/i.test(localClean)) {
       if (!nameClean.includes(localClean.replace(/[^a-z]/g, '')) && !localClean.includes(nameClean.replace(/[^a-z]/g, ''))) {
         score += 2;
         signalCategories.structural = true;
@@ -858,6 +857,24 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw) {
     signalCategories.structural = true;
     reasons.push("Large blocks of randomized alphanumeric strings detected (Bayesian poisoning attempt)");
   }
+
+  // 16. NEW: Contextual Anomaly Detection (Compromised Legitimate Domain)
+  var financialKeywords = /\b(order confirmed|transaction id|invoice|payment|usd|eur|amount|refund)\b/i;
+  var nonFinancialSenders = /^(careers|hr|jobs|info|newsletter|marketing|noreply|no-reply)$/i;
+  if (financialKeywords.test(bodyLower) && nonFinancialSenders.test(emailLocalPart)) {
+    score += 4;
+    signalCategories.structural = true;
+    reasons.push("Contextual anomaly: Financial/transactional content sent from a non-financial address ('" + emailLocalPart + "')");
+  }
+  // 16b. Evasive HTML Attachment Redirect Detection
+// Use rawContent which includes attachments, not just bodyText
+if (rawContent) {
+  if (/\.html/i.test(rawContent) && /window\.atob\s*\(/i.test(rawContent) && /document\.location\.href/i.test(rawContent)) {
+    score += 5;
+    signalCategories.structural = true;
+    reasons.push("Malicious HTML attachment detected with Base64 obfuscated redirect (window.atob)");
+  }
+}
 
   // CRITICAL SAFEGUARD: Never report an email with a score of 0.
   if (score === 0) {
