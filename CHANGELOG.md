@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-09-14
+
+### Fixed
+- **Critical Fix for HTML Attachment Detection (Rule 16b)**: Resolved a blind spot where malicious HTML attachments containing Base64-obfuscated redirects (`window.atob`) were not being detected. In Google Apps Script, `message.getPlainBody()` does not include raw attachment data. Updated the `evaluateMessage` function signature to accept `rawContent` and modified the regex evaluation to scan the full raw email payload, ensuring evasive attachment-based phishing is now correctly flagged and penalized.
+
 ## [1.4.0] - 2026-09-07
 
 ### Added
