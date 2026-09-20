@@ -15,7 +15,7 @@ Most email users passively accept spam, trusting filters to catch threats. But s
 3. **Creating network effects** — the more people use this, the faster bad actors get shut down.
 
 ## How it works
-
+![Main Window](Main_Window.jpg)
 1. **Scans your Gmail spam folder** (configurable, default: 30 messages per run).
 2. **Extracts the real originating IP** from email headers (handles forwarded emails, attachments, IPv4/IPv6).
 3. **Classifies the threat** using heuristic scoring (phishing vs. spam, brand impersonation, homoglyph attacks, suspicious links, obfuscation).
