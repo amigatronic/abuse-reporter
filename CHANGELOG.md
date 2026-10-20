@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-10-20
+
+### Added
+- **Opaque Gaming/VIP Lure Detection (Rule 17)**: New heuristic to catch vague, generic domains (e.g., containing "vip", "board", "club", "elite", "premium") combined with gaming or deposit-related lures (e.g., "welcome offer", "first deposit", "players"). This specifically targets sophisticated "clean spam" campaigns that intentionally avoid traditional high-risk keywords.
+- **Enhanced Tracking Domain Detection (Rule 7)**: Expanded the tracking/redirect domain regex to explicitly include `link.` subdomains (e.g., `link.example.com`), which are increasingly used by spam campaigns to mask final destination URLs while appearing brand-consistent.
+
 ## [1.4.2] - 2026-09-14
 
 ### Fixed
