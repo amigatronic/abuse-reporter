@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.4.2
+ * ABUSE REPORTER - v1.4.3
  * ============================================================
  */
 
@@ -50,7 +50,7 @@ var PERSISTENT_CACHE = {};
 var CACHE_DIRTY = false;
 
 // If true, the script will evaluate and log actions but will NOT send emails or move messages to trash.
-var DRY_RUN = false;
+var DRY_RUN = true;
 
 // --- ESCALATION CONFIGURATION ---
 // Maps provider keywords to their specific escalation CC emails.
@@ -879,6 +879,16 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
       signalCategories.structural = true;
       reasons.push("Malicious HTML attachment detected with Base64 obfuscated redirect (window.atob)");
     }
+  }
+
+    // 17. Opaque Gaming/VIP Lure Detection
+  var opaqueDomainPattern = /\b(vip|board|club|elite|premium|global|prime)\b/i;
+  var gamingLurePattern = /\b(deposit|players|welcome offer|first deposit|jackpot|spins|cashier)\b/i;
+  
+  if (opaqueDomainPattern.test(fromDomain) && gamingLurePattern.test(bodyLower)) {
+    score += 4;
+    signalCategories.keywords = true;
+    reasons.push("Opaque/generic domain combined with gaming/deposit lure");
   }
 
   // CRITICAL SAFEGUARD: Never report an email with a score of 0.
