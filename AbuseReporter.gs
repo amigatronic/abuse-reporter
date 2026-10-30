@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.4.3
+ * ABUSE REPORTER - v1.4.2
  * ============================================================
  */
 
@@ -50,7 +50,7 @@ var PERSISTENT_CACHE = {};
 var CACHE_DIRTY = false;
 
 // If true, the script will evaluate and log actions but will NOT send emails or move messages to trash.
-var DRY_RUN = true;
+var DRY_RUN = false;
 
 // --- ESCALATION CONFIGURATION ---
 // Maps provider keywords to their specific escalation CC emails.
@@ -699,7 +699,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     bulkSpamScore += 2;
     bulkSpamReasons.push("Randomized string in sender email local part");
   }
-  
   if (/https?:\/\/(track|click|redirect|go|mail|link)\.[a-z0-9-]+\.(net|com|org|info|biz|io)/i.test(bodyText || "")) {
     bulkSpamScore += 2;
     bulkSpamReasons.push("Contains tracking or redirect link domain");
@@ -754,7 +753,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     }
   }
 
-  // 10. Suspicious Domain Structure & Display Name Mismatch
+  // 10. Suspicious Domain Structure & Display Name Mismatch (UPDATED)
   var domainParts = fromDomain.split('.');
   if (domainParts.length >= 5) {
     score += 3;
@@ -762,22 +761,19 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     reasons.push("Suspiciously deep subdomain structure (typical of burner domains)");
   }
   if (displayName && emailLocalPart) {
-    var nameClean = displayName.toLowerCase().replace(/[^a-z]/g, '');
+    var nameClean = displayName.toLowerCase().replace(/\s+/g, '');
     var localClean = emailLocalPart.toLowerCase();
-    
-    if (/^[a-z]+$/.test(nameClean) && nameClean.length > 6) {
-      if (!nameClean.includes(localClean) && !localClean.includes(nameClean)) {
-        if (/^[a-z]{4,8}$/.test(localClean) && !/^(info|admin|support|sales|contact|hello|noreply|no-reply)$/.test(localClean)) {
-          score += 2;
-          signalCategories.structural = true;
-          reasons.push("Formal display name paired with random email username (e.g., '" + displayName + "' vs '" + emailLocalPart + "')");
-        }
+    // AGGIUNTO: 'digest' e 'newsletter' alla lista delle parti locali sospette
+    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin|careers|hr|digest|newsletter/i.test(localClean)) {
+      if (!nameClean.includes(localClean.replace(/[^a-z]/g, '')) && !localClean.includes(nameClean.replace(/[^a-z]/g, ''))) {
+        score += 2;
+        signalCategories.structural = true;
+        reasons.push("Display name does not match email username (impersonation attempt)");
       }
     }
   }
 
   // 11. Expanded Payment/Account Phishing Keywords
-  
   var extendedPhishingKeywords = /\b(payment failed|update payment|subscription renewal|cloud storage|account suspended|verify your identity|urgent action|required action|deposit successful|funds available|transaction id|order confirmed)\b/i;
   if (extendedPhishingKeywords.test(subject + " " + bodyLower)) {
     score += 3;
@@ -863,7 +859,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     reasons.push("Large blocks of randomized alphanumeric strings detected (Bayesian poisoning attempt)");
   }
 
-  // 16. Contextual Anomaly Detection (Compromised Legitimate Domain)
+  // 16. Contextual Anomaly Detection
   var financialKeywords = /\b(order confirmed|transaction id|invoice|payment|usd|eur|amount|refund)\b/i;
   var nonFinancialSenders = /^(careers|hr|jobs|info|newsletter|marketing|noreply|no-reply)$/i;
   if (financialKeywords.test(bodyLower) && nonFinancialSenders.test(emailLocalPart)) {
@@ -881,17 +877,17 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     }
   }
 
-    // 17. Opaque Gaming/VIP Lure Detection
-  var opaqueDomainPattern = /\b(vip|board|club|elite|premium|global|prime)\b/i;
-  var gamingLurePattern = /\b(deposit|players|welcome offer|first deposit|jackpot|spins|cashier)\b/i;
+  // 17. Opaque Gaming/VIP Lure Detection (FIXED)
+  var opaqueDomainPattern = /(vip|board|club|elite|premium|global|prime)/i;
+  var gamingLurePattern = /\b(deposit|players|welcome offer|first deposit|jackpot|spins|cashier|welcome package|payouts)\b/i;
   
   if (opaqueDomainPattern.test(fromDomain) && gamingLurePattern.test(bodyLower)) {
     score += 4;
     signalCategories.keywords = true;
-    reasons.push("Opaque/generic domain combined with gaming/deposit lure");
+    reasons.push("Opaque/generic domain ('" + fromDomain + "') combined with gaming/deposit lure");
   }
 
-  // CRITICAL SAFEGUARD: Never report an email with a score of 0.
+  // CRITICAL SAFEGUARD
   if (score === 0) {
     return { category: "likely-false-positive", score: 0, reasons: ["No risk signals detected (score 0)"], fromDomain: fromDomain };
   }
