@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ABUSE REPORTER - v1.4.3
+ * ABUSE REPORTER - v1.4.4
  * ============================================================
  */
 
@@ -680,11 +680,13 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     }
   }
 
-  // 6. Standard Keywords
-  var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus"];
-  var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to"];
+  // 6. Standard Keywords (ESPANSO per Spam Casinò/Gioco in Italiano)
+  var highRiskKeywords = ["verify your account", "account suspended", "account locked", "urgent action required", "confirm your identity", "welcome bonus", "free spins", "exclusive bonus", "giri gratuiti", "giri gratis", "bonus di benvenuto"];
+  var mediumRiskKeywords = ["password", "bank", "credit card", "iban", "casino", "slots", "125%", "upto", "up to", "versamento", "ricarica", "senza deposito", "primo versamento", "prelievo"];
+  
   var hrHits = highRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
   var mrHits = mediumRiskKeywords.filter(function(k) { return bodyLower.indexOf(k) !== -1; });
+  
   if (hrHits.length > 0 || mrHits.length > 0) {
     score += 1;
     signalCategories.keywords = true;
@@ -737,13 +739,24 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     reasons.push("Combination of urgency triggers and 'free gift/bonus' claims detected");
   }
 
-  // 9. Universal Classifieds Bot Detection
-  var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain);
-  var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail);
-  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora|encore disponible|récupérer)\b/i;
+    // 9. Universal Classifieds Bot Detection (EXPANDED)
+  // Expanded free providers to include major European free email services heavily abused by marketplace bots
+  var isFreeProvider = /(gmail|yahoo|outlook|hotmail|icloud|aol)\.com$/.test(fromDomain) || 
+                       /(web\.de|gmx\.de|tiscali\.it|libero\.it|virgilio\.it|alice\.it)$/.test(fromDomain);
+                       
+  // Added underscore+numbers pattern to catch more burner variations
+  var isBurnerEmail = /^[a-z]{6,}[0-9]{2,}@/.test(fromEmail) || /^[a-z_]+\d+@/.test(fromEmail);
+  
+  // Added "noch da", "ancora disponibile", "ancora da", "is this still available"
+  var genericQueryRegex = /\b(available|still have|pick up|interested|noch zu haben|noch da|verfügbar|abholen|interesse|disponibile|ritiro|interessato|ancora disponibile|ancora da|encore disponible|encore dispo|récupérer|is this still available)\b/i;
   var hasGenericQuery = genericQueryRegex.test(subject + " " + bodyLower);
   var isVeryShortBody = bodyText && bodyText.replace(/\s/g, '').length < 150;
-  if (isFreeProvider && isBurnerEmail && hasGenericQuery) {
+  
+  if (isFreeProvider && hasGenericQuery && isVeryShortBody) {
+    score += 4;
+    signalCategories.structural = true;
+    reasons.push("Matched universal classifieds bot pattern (free provider + generic short query + very short body)");
+  } else if (isFreeProvider && isBurnerEmail && hasGenericQuery) {
     score += 4;
     signalCategories.structural = true;
     reasons.push("Matched universal classifieds bot pattern (burner email + generic short query)");
@@ -753,7 +766,7 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     }
   }
 
-  // 10. Suspicious Domain Structure & Display Name Mismatch (UPDATED)
+  // 10. Suspicious Domain Structure & Display Name Mismatch (ESPANSO)
   var domainParts = fromDomain.split('.');
   if (domainParts.length >= 5) {
     score += 3;
@@ -763,8 +776,8 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
   if (displayName && emailLocalPart) {
     var nameClean = displayName.toLowerCase().replace(/\s+/g, '');
     var localClean = emailLocalPart.toLowerCase();
-    // AGGIUNTO: 'digest' e 'newsletter' alla lista delle parti locali sospette
-    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin|careers|hr|digest|newsletter/i.test(localClean)) {
+    // AGGIUNTO: 'hello' e 'noreply' alla lista delle parti locali sospette
+    if (/^[a-z\s]+$/.test(nameClean) && /[0-9]|alert|no-reply|info|support|admin|careers|hr|hello|noreply/i.test(localClean)) {
       if (!nameClean.includes(localClean.replace(/[^a-z]/g, '')) && !localClean.includes(nameClean.replace(/[^a-z]/g, ''))) {
         score += 2;
         signalCategories.structural = true;
@@ -772,7 +785,6 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
       }
     }
   }
-
   // 11. Expanded Payment/Account Phishing Keywords
   var extendedPhishingKeywords = /\b(payment failed|update payment|subscription renewal|cloud storage|account suspended|verify your identity|urgent action|required action|deposit successful|funds available|transaction id|order confirmed)\b/i;
   if (extendedPhishingKeywords.test(subject + " " + bodyLower)) {
@@ -885,6 +897,26 @@ function evaluateMessage(headerText, bodyText, subject, fromDecoded, fromRaw, ra
     score += 4;
     signalCategories.keywords = true;
     reasons.push("Opaque/generic domain ('" + fromDomain + "') combined with gaming/deposit lure");
+  }
+
+    // 18. List Validation / Ping Spam Detection (UPDATED with Forwarding Safeguard)
+  var validationPhrases = /\b(reply to confirm|confirm you received|quick hello|are you there|is this email active|please reply|confirm receipt|rispondi per confermare|just a quick hello)\b/i;
+  var hasNoLinks = !/https?:\/\//i.test(bodyText || "");
+  var isVeryShort = (bodyText || "").replace(/\s/g, '').length < 250;
+  
+  // SAFEGUARD: Do not auto-report if the email shows signs of being forwarded (SRS) 
+  // to avoid penalizing the forwarding infrastructure instead of the original spammer.
+  var isForwarded = /SRS0=|forwarded message|messaggio inoltrato/i.test(headerText);
+  
+  if (validationPhrases.test(subject + " " + bodyLower) && hasNoLinks && isVeryShort && !isForwarded) {
+    score += 4;
+    signalCategories.keywords = true;
+    reasons.push("List validation/ping spam detected (requests reply confirmation without legitimate content or links)");
+  } else if (validationPhrases.test(subject + " " + bodyLower) && hasNoLinks && isVeryShort && isForwarded) {
+    // Optional: still flag it, but with a lower score or specific reason to prevent auto-reporting
+    score += 2; 
+    signalCategories.keywords = true;
+    reasons.push("Ping spam detected, but SKIPPED reporting due to SRS/forwarding headers (avoids penalizing forwarding infrastructure)");
   }
 
   // CRITICAL SAFEGUARD
